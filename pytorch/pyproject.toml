@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "imdb-sa-pytorch"
+version = "0.1.0"
+description = "IMDB sentiment analysis by way of PyTorch"
+authors = ["Josh Hansen <git@joshhansen.tech>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pytorch-lightning = "^2.0.9.post0"
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.16.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
