@@ -4,6 +4,7 @@ import json
 import os
 
 from pytorch_lightning import LightningModule, Trainer
+from torchmetrics import Accuracy, AUROC, F1Score
 
 import torch
 from torch import nn
@@ -12,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 EMBEDDING_DIMS = 20
 fX = torch.float64
 iX = torch.long
+device = torch.device("cuda")
 
 class ObjectDataset(Dataset):
  def __init__(self, obj):
@@ -29,6 +31,14 @@ class ImdbSentiment(LightningModule):
   self.embedding = nn.Embedding(vocab_size, EMBEDDING_DIMS, dtype=fX)
   self.linear1 = nn.Linear(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX)
   self.linear2 = nn.Linear(EMBEDDING_DIMS // 2, 1, dtype=fX)
+
+  self.acc = Accuracy(task='binary').to(device)
+  self.auroc = AUROC(task='binary').to(device)
+  self.f1score = F1Score(task='binary').to(device)
+
+  self.metrics = [
+   self.acc, self.auroc, self.f1score
+  ]
 
  def params(self):
   return itertools.chain(self.embedding.parameters(), self.linear1.parameters(), self.linear2.parameters())
@@ -52,14 +62,60 @@ class ImdbSentiment(LightningModule):
   output = self.forward(inputs, target)
   # print(f"out shape: {output.shape} {output.dtype}")
   # print(f"target shape: {target.shape} {target.dtype}")
-  return torch.nn.functional.binary_cross_entropy(output, target.view(output.shape))
+
+  target_resized = target.view(output.shape)
+  loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
+
+  self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+
+  # Make specific predictions
+  preds = output.round()
+
+  for m in self.metrics:
+   mval = m(preds, target_resized)
+   self.log(f"test_{m.__class__.__name__}", mval, on_step=True, on_epoch=True, prog_bar=True)
+
+  return loss
 
  def validation_step(self, batch, batch_idx):
-  return self.training_step(batch, batch_idx)
+  inputs, target = batch
+  output = self.forward(inputs, target)
+
+  target_resized = target.view(output.shape)
+  loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
+
+  self.log('test_loss', loss, prog_bar=True)
+
+  # Make specific predictions
+  preds = output.round()
+
+  for m in self.metrics:
+   mval = m(preds, target_resized)
+   self.log(f"test_{m.__class__.__name__}", mval, prog_bar=True)
+
+  return loss
+
+ def test_step(self, batch, batch_idx):
+  inputs, target = batch
+  output = self.forward(inputs, target)
+
+  target_resized = target.view(output.shape)
+  loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
+
+  # Make specific predictions
+  preds = output.round()
+
+  self.log('test_loss', loss, prog_bar=True)
+
+  for m in self.metrics:
+   mval = m(preds, target_resized)
+   self.log(f"test_{m.__class__.__name__}", mval, prog_bar=True)
+
+  return loss
+  
 
  def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.params(), lr=1e-3)
-    return optimizer
+    return torch.optim.Adam(self.params(), lr=1e-3)
 
 if __name__=="__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
@@ -67,6 +123,7 @@ if __name__=="__main__":
  with open(path) as r:
   raw = json.load(r)
 
+ 
  vocab = set()
  vocab.add("__padding__")
  for datum in raw:
@@ -115,7 +172,7 @@ if __name__=="__main__":
   else:
    x = x[:target_len]
 
-  data.append((torch.tensor(x, dtype=iX), torch.tensor(y, dtype=fX)))
+  data.append((torch.tensor(x, dtype=iX, device=device), torch.tensor(y, dtype=fX, device=device)))
 
  del indexed
  
@@ -123,15 +180,17 @@ if __name__=="__main__":
 
  
 
- train, val = random_split(dataset, [0.9, 0.1])
+ train, val, test = random_split(dataset, [0.8, 0.1, 0.1])
 
  # print(dir(train))
 
  train_loader = DataLoader(train, shuffle=True, batch_size=100)
  val_loader = DataLoader(val, batch_size=100)
+ test_loader = DataLoader(test, batch_size=100)
 
  model = ImdbSentiment(len(vocab))
 
- trainer = Trainer()
+ trainer = Trainer(max_epochs=50)
  trainer.fit(model, train_loader, val_loader)
 
+ trainer.test(ckpt_path='best', dataloaders=test_loader)
