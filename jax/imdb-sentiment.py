@@ -144,12 +144,8 @@ def random_split(data, weights):
 #  def configure_optimizers(self):
 #     return torch.optim.Adam(self.params(), lr=1e-3)
 
-def unpack_theta(theta) -> Mapping[str, jnp.ndarray]:
- return { 'b': theta[0], 'w': theta[1:] }
-
 def model(theta, x):
- parts = unpack_theta(theta)
- b, w = parts['b'], parts['w']
+ b, w = theta['b'], theta['w']
  return jnn.sigmoid(x @ w + b)
 
 def loss(theta, x, y):
@@ -157,11 +153,16 @@ def loss(theta, x, y):
  return jnp.mean((prediction-y)**2)
 
 @jax.jit
-def update(theta, x, y, lr=1e-6):
+def update(params, x, y, lr=1e-6):
  # print(f"theta: {theta} x: {x}, y: {y}")
- pred = model(theta, x)
+ pred = model(params, x)
  # print(f"pred: {pred}")
- return theta - lr * jax.grad(loss)(theta, x, y)
+
+ grads = jax.grad(loss)(params, x, y)
+
+ return jax.tree_map(
+     lambda p, g: p - lr * g, params, grads
+ )
 
 if __name__=="__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
@@ -253,7 +254,12 @@ if __name__=="__main__":
  # Thetas ordering:
  # 0   bias
  # 1.. target_len weights
- theta = jrand.normal(rng_key, (target_len + 1,), dtype=fX)
+
+ w_key, b_key = jrand.split(rng_key)
+ theta = {
+  'w': jrand.normal(w_key, (target_len,)),
+  'b': jrand.normal(b_key, (1,))
+ }
 
  for _ in range(1000):
    theta = update(theta, x_train, y_train)
