@@ -255,10 +255,9 @@ if __name__=="__main__":
  for _ in range(1000):
    theta = update(theta, x_train, y_train)
 
- 
- matplotlib.use('qtagg')
- plt.scatter(model(theta, x_train), y_train)
- plt.show()
+ # matplotlib.use('qtagg')
+ # plt.scatter(model(theta, x_train), y_train)
+ # plt.show()
 
  # w, b = theta
  # print(f"w: {w:<.2f}, b: {b:<.2f}")
