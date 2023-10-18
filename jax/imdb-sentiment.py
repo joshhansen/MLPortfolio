@@ -144,17 +144,17 @@ def random_split(data, weights):
 #  def configure_optimizers(self):
 #     return torch.optim.Adam(self.params(), lr=1e-3)
 
-def model(theta, x):
- b, w = theta['b'], theta['w']
+def model(params, x):
+ b, w = params['b'], params['w']
  return jnn.sigmoid(x @ w + b)
 
-def loss(theta, x, y):
- prediction = model(theta, x)
+def loss(params, x, y):
+ prediction = model(params, x)
  return jnp.mean((prediction-y)**2)
 
 @jax.jit
 def update(params, x, y, lr=1e-6):
- # print(f"theta: {theta} x: {x}, y: {y}")
+ # print(f"params: {params} x: {x}, y: {y}")
  pred = model(params, x)
  # print(f"pred: {pred}")
 
@@ -251,27 +251,27 @@ if __name__=="__main__":
 
  start = time.time()
 
- # Thetas ordering:
+ # paramss ordering:
  # 0   bias
  # 1.. target_len weights
 
  w_key, b_key = jrand.split(rng_key)
- theta = {
+ params = {
   'w': jrand.normal(w_key, (target_len,)),
   'b': jrand.normal(b_key, (1,))
  }
 
  for _ in range(1000):
-   theta = update(theta, x_train, y_train)
+   params = update(params, x_train, y_train)
 
  dur = time.time() - start
 
  print(f"duration: {dur}")
  # matplotlib.use('qtagg')
- # plt.scatter(model(theta, x_train), y_train)
+ # plt.scatter(model(params, x_train), y_train)
  # plt.show()
 
- # w, b = theta
+ # w, b = params
  # print(f"w: {w:<.2f}, b: {b:<.2f}")
 
  # print(dir(train))
