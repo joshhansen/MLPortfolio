@@ -18,6 +18,8 @@ from more_itertools import unzip
 
 import numpy as np
 
+LinearParams = Mapping[str, jnp.ndarray]
+
 EMBEDDING_DIMS = 20
 fX = jnp.float32
 iX = jnp.uint32
@@ -256,7 +258,7 @@ if __name__=="__main__":
  # 1.. target_len weights
 
  w_key, b_key = jrand.split(rng_key)
- params = {
+ params: LinearParams = {
   'w': jrand.normal(w_key, (target_len,)),
   'b': jrand.normal(b_key, (1,))
  }
