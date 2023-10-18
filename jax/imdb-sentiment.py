@@ -4,6 +4,7 @@ from collections import Counter
 import itertools
 import json
 import os
+import time
 
 import jax
 from jax import nn as jnn
@@ -247,6 +248,8 @@ if __name__=="__main__":
 
  rng_key = jrand.PRNGKey(85439357)
 
+ start = time.time()
+
  # Thetas ordering:
  # 0   bias
  # 1.. target_len weights
@@ -255,6 +258,9 @@ if __name__=="__main__":
  for _ in range(1000):
    theta = update(theta, x_train, y_train)
 
+ dur = time.time() - start
+
+ print(f"duration: {dur}")
  # matplotlib.use('qtagg')
  # plt.scatter(model(theta, x_train), y_train)
  # plt.show()
