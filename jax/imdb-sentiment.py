@@ -155,6 +155,7 @@ def loss(theta, x, y):
  prediction = model(theta, x)
  return jnp.mean((prediction-y)**2)
 
+@jax.jit
 def update(theta, x, y, lr=1e-6):
  # print(f"theta: {theta} x: {x}, y: {y}")
  pred = model(theta, x)
