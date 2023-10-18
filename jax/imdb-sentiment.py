@@ -238,10 +238,13 @@ if __name__=="__main__":
 
  x_train_raw, y_train_raw = unzip(train)
  x_val, y_val = unzip(val)
- x_test, y_test = unzip(val)
+ x_test_raw, y_test_raw = unzip(val)
 
  x_train = jnp.array(list(x_train_raw))
  y_train = jnp.array(list(y_train_raw))
+
+ x_test = jnp.array(list(x_test_raw))
+ y_test = jnp.array(list(y_test_raw))
 
  print(f"x_train shape: {x_train.shape}")
  print(f"y_train shape: {y_train.shape}")
@@ -269,6 +272,15 @@ if __name__=="__main__":
  dur = time.time() - start
 
  print(f"duration: {dur}")
+
+ preds = model(params, x_test)
+
+ correct = (y_test == preds).sum()
+
+ accuracy = correct / len(x_test)
+
+ print(f"accuracy: {accuracy}")
+
  # matplotlib.use('qtagg')
  # plt.scatter(model(params, x_train), y_train)
  # plt.show()
