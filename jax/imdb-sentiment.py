@@ -1,3 +1,5 @@
+from typing import Mapping
+
 from collections import Counter
 import itertools
 import json
@@ -141,10 +143,12 @@ def random_split(data, weights):
 #  def configure_optimizers(self):
 #     return torch.optim.Adam(self.params(), lr=1e-3)
 
+def unpack_theta(theta) -> Mapping[str, jnp.ndarray]:
+ return { 'b': theta[0], 'w': theta[1:] }
 
 def model(theta, x):
- b = theta[0]
- w = theta[1:]
+ parts = unpack_theta(theta)
+ b, w = parts['b'], parts['w']
  return jnn.sigmoid(x @ w + b)
 
 def loss(theta, x, y):
@@ -176,8 +180,8 @@ if __name__=="__main__":
  word_to_idx = {word: i for i, word in enumerate(vocab)}
  padding_idx = word_to_idx["__padding__"]
 
- indexed = list()
- lens = Counter()
+ indexed: list[tuple[ list[int], int]] = list()
+ lens: Counter = Counter()
 
  for datum in raw:
   words = datum['t'].split()
@@ -186,14 +190,14 @@ if __name__=="__main__":
   lens[len(word_indices)] += 1
 
   class_ = datum['s']
-  indexed .append((word_indices, class_))
+  indexed.append((word_indices, class_))
  
  del raw
 
- sorted_lens = list(lens.items())
+ sorted_lens: list[tuple[int,int]] = list(lens.items())
  sorted_lens.sort(key = lambda x: x[0])
  cum = 0
- target_len = None
+ target_len = -1
  for l, n in sorted_lens:
   cum += n
   pct = cum / lens.total()
@@ -227,12 +231,12 @@ if __name__=="__main__":
  print(f"val: {len(val)}")
  print(f"test: {len(test)}")
 
- x_train, y_train = unzip(train)
+ x_train_raw, y_train_raw = unzip(train)
  x_val, y_val = unzip(val)
  x_test, y_test = unzip(val)
 
- x_train = jnp.array(list(x_train))
- y_train = jnp.array(list(y_train))
+ x_train = jnp.array(list(x_train_raw))
+ y_train = jnp.array(list(y_train_raw))
 
  print(f"x_train shape: {x_train.shape}")
  print(f"y_train shape: {y_train.shape}")
