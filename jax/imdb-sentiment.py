@@ -18,6 +18,8 @@ from more_itertools import unzip
 
 import numpy as np
 
+#TODO Drop truncation / padding?
+
 LinearParams = Mapping[str, jnp.ndarray]
 
 EMBEDDING_DIMS = 20
@@ -42,7 +44,7 @@ def random_split(data, weights):
 
  return parts
 
-
+  
 
 # class ObjectDataset(Dataset):
 #  def __init__(self, obj):
@@ -147,8 +149,10 @@ def random_split(data, weights):
 #     return torch.optim.Adam(self.params(), lr=1e-3)
 
 def model(params, x):
- b, w = params['b'], params['w']
- return jnn.sigmoid(x @ w + b)
+ emb, dense = params
+ embedded = emb[x].sum(axis=1)
+ b, w = dense['b'], dense['w']
+ return jnn.sigmoid(embedded @ w + b)
 
 def loss(params, x, y):
  prediction = model(params, x)
@@ -260,11 +264,16 @@ if __name__=="__main__":
  # 0   bias
  # 1.. target_len weights
 
- w_key, b_key = jrand.split(rng_key)
- params: LinearParams = {
-  'w': jrand.normal(w_key, (target_len,)),
-  'b': jrand.normal(b_key, (1,))
- }
+ emb_key, w_key, b_key = jrand.split(rng_key, 3)
+
+ emb = jrand.normal(rng_key, (len(vocab), EMBEDDING_DIMS,))
+ params = [
+  emb,
+  {
+   'w': jrand.normal(w_key, (EMBEDDING_DIMS,)),
+   'b': jrand.normal(b_key, (1,))
+  }
+ ]
 
  for _ in range(1000):
    params = update(params, x_train, y_train)
