@@ -10,6 +10,7 @@ import jax
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrand
+from jax import tree_util as jtree
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -148,29 +149,70 @@ def random_split(data, weights):
 #  def configure_optimizers(self):
 #     return torch.optim.Adam(self.params(), lr=1e-3)
 
-def model(params, x):
- emb, dense = params
- embedded = emb[x].sum(axis=1)
- b, w = dense['b'], dense['w']
- return jnn.sigmoid(embedded @ w + b)
+# @jtree.register_pytree_node_class
+# class Dense:
+#  def __init__(self, rng_key, in_dims, out_dims, dtype=fX):
+#   self.rng_key, w_key, b_key = jrand.split(rng_key, 3)
+#   self.weights = jrand.normal(w_key, (in_dims, out_dims), dtype=dtype)
+#   self.biases = jrand.normal(b_key, (out_dims,), dtype=dtype)
 
-def loss(params, x, y):
- prediction = model(params, x)
- return jnp.mean((prediction-y)**2)
+#  def __call__(self, x):
+#   return x @ self.weights + self.biases
+
+#  def tree_flatten(self):
+#   aux = {
+#    'rng_key': self.rng_key,
+#    'in_dims': self.weights.shape[0],
+#    'out_dims': self.weights.shape[1],
+#    'dtype': self.weights.dtype,
+#   }
+#   return ((self.weights, self.biases), aux)
+
+#  @classmethod
+#  def tree_unflatten(cls, aux, children):
+#   rng_key = aux['rng_key']
+#   in_dims = aux['in_dims']
+#   out_dims = aux['out_dims']
+#   dtype = aux['dtype']
+#   instance = cls(rng_key, in_dims, out_dims, dtype)
+
+#   instance.weights, instance.biases = children
+
+#   return instance
+
+
+def model(params, x):
+ emb, *dense = params
+
+ out = emb[x].sum(axis=1)
+ for i, d in enumerate(dense):
+  out = out @ d['w'] + d['b']
+  if i < len(dense) - 1:
+   out = jnn.relu(out)
+  else:
+   out = jnn.sigmoid(out)
+
+ return out.sum(axis=1)
 
 @jax.jit
-def update(params, x, y, lr=1e-6):
- # print(f"params: {params} x: {x}, y: {y}")
- pred = model(params, x)
- # print(f"pred: {pred}")
+def loss(params, x, y):
+ preds = model(params, x)
+ delta = preds - y
+ return jnp.mean(delta**2)
 
- grads = jax.grad(loss)(params, x, y)
+dloss = jax.grad(loss)
+
+@jax.jit
+def update(params, x, y, lr=1e-1):
+ # pred = model(params, x)
+
+ grad = dloss(params, x, y)
 
  return jax.tree_map(
-     lambda p, g: p - lr * g, params, grads
+     lambda p, g: p - lr * g, params, grad
  )
 
-if __name__=="__main__":
+if __name__ == "__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
 
  with open(path) as r:
@@ -184,10 +226,13 @@ if __name__=="__main__":
   vocab.update(words)
 
  # print(vocab)
- print(f"vocab_len: {len(vocab)}")
+ vocab_len = len(vocab)
+ print(f"vocab_len: {vocab_len}")
 
  word_to_idx = {word: i for i, word in enumerate(vocab)}
  padding_idx = word_to_idx["__padding__"]
+
+ del vocab
 
  indexed: list[tuple[ list[int], int]] = list()
  lens: Counter = Counter()
@@ -202,20 +247,26 @@ if __name__=="__main__":
   indexed.append((word_indices, class_))
  
  del raw
+ del word_to_idx
 
  sorted_lens: list[tuple[int,int]] = list(lens.items())
  sorted_lens.sort(key = lambda x: x[0])
+ total_lens = lens.total()
+ del lens
+
  cum = 0
  target_len = -1
  for l, n in sorted_lens:
   cum += n
-  pct = cum / lens.total()
+  pct = cum / total_lens
   if pct >= 0.95:
    target_len = l
    break
 
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
+
+ del sorted_lens
 
  data = list()
  for x, y in indexed:
@@ -229,26 +280,36 @@ if __name__=="__main__":
 
  del indexed
  
- # dataset = ObjectDataset(data)
- dataset = data
-
  print(f"data: {len(data)}")
 
- train, val, test = random_split(dataset, [0.8, 0.1, 0.1])
+ train, val, test = random_split(data, [0.8, 0.1, 0.1])
+ del data
 
  print(f"train: {len(train)}")
  print(f"val: {len(val)}")
  print(f"test: {len(test)}")
 
  x_train_raw, y_train_raw = unzip(train)
- x_val, y_val = unzip(val)
+ x_val_raw, y_val_raw = unzip(val)
  x_test_raw, y_test_raw = unzip(val)
 
  x_train = jnp.array(list(x_train_raw))
+ del x_train_raw
+ 
  y_train = jnp.array(list(y_train_raw))
+ del y_train_raw
+
+ x_val = jnp.array(list(x_val_raw))
+ del x_val_raw
+
+ y_val = jnp.array(list(y_val_raw))
+ del y_val_raw
 
  x_test = jnp.array(list(x_test_raw))
+ del x_test_raw
+ 
  y_test = jnp.array(list(y_test_raw))
+ del y_test_raw
 
  print(f"x_train shape: {x_train.shape}")
  print(f"y_train shape: {y_train.shape}")
@@ -256,37 +317,59 @@ if __name__=="__main__":
  print(x_train[:3])
  print(y_train[:3])
 
+
  rng_key = jrand.PRNGKey(85439357)
+ emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
 
- start = time.time()
-
- # paramss ordering:
- # 0   bias
- # 1.. target_len weights
-
- emb_key, w_key, b_key = jrand.split(rng_key, 3)
-
- emb = jrand.normal(rng_key, (len(vocab), EMBEDDING_DIMS,))
  params = [
-  emb,
+  jrand.normal(rng_key, (vocab_len, EMBEDDING_DIMS,)),
   {
-   'w': jrand.normal(w_key, (EMBEDDING_DIMS,)),
-   'b': jrand.normal(b_key, (1,))
+   'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
+   'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
+  },
+  {
+   'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
+   'b': jrand.normal(dense1_b_key, (1,))
   }
  ]
 
- for _ in range(1000):
-   params = update(params, x_train, y_train)
+ start = time.time()
+ for i in range(1000):
+  print(f"\r{i}     ")
+  params = update(params, x_train, y_train)
+
+  val_preds = model(params, x_val)
+
+  val_grads = dloss(params, x_val, y_val)
+
+  print(f"val preds shape: {val_preds.shape}")
+
+  print(f"val grads: {val_grads}")
+  
+
+  print(f"{i} loss: {loss(params, x_train, y_train)}")
 
  dur = time.time() - start
 
  print(f"duration: {dur}")
 
+ print(f"y_test shape: {y_test.shape}")
+
  preds = model(params, x_test)
 
- correct = (y_test == preds).sum()
+ print(f"preds shape: {preds.shape}")
 
- accuracy = correct / len(x_test)
+ matching = y_test == preds
+
+ print(f"matching shape: {matching.shape}")
+
+ correct = matching.sum()
+
+ print(f"# correct: {correct}")
+
+ print(f"correct shape: {correct.shape}")
+
+ accuracy = correct / x_test.shape[0]
 
  print(f"accuracy: {accuracy}")
 
