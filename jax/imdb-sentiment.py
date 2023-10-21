@@ -4,6 +4,7 @@ from collections import Counter
 import itertools
 import json
 import os
+import re
 import time
 
 import jax
@@ -212,6 +213,10 @@ def update(params, x, y, lr=1e-1):
      lambda p, g: p - lr * g, params, grad
  )
 
+token_rgx = re.compile("(?:[A-Za-z0-9]+'[A-Za-z0-9]+)|[A-Za-z0-9]+")
+def tokenize(s):
+ return [s.lower() for s in token_rgx.findall(s)]
+
 if __name__ == "__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
 
@@ -222,7 +227,7 @@ if __name__ == "__main__":
  vocab = set()
  vocab.add("__padding__")
  for datum in raw:
-  words = datum['t'].split()
+  words = tokenize(datum['t'])
   vocab.update(words)
 
  # print(vocab)
@@ -238,7 +243,7 @@ if __name__ == "__main__":
  lens: Counter = Counter()
 
  for datum in raw:
-  words = datum['t'].split()
+  words = tokenize(datum['t'])
   word_indices = [ word_to_idx[word] for word in words ]
 
   lens[len(word_indices)] += 1
