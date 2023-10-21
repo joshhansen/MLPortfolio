@@ -2,6 +2,7 @@ from collections import Counter
 import itertools
 import json
 import os
+import re
 
 from pytorch_lightning import LightningModule, Trainer
 from torchmetrics import Accuracy, AUROC, F1Score
@@ -117,6 +118,10 @@ class ImdbSentiment(LightningModule):
  def configure_optimizers(self):
     return torch.optim.Adam(self.params(), lr=1e-3)
 
+token_rgx = re.compile("(?:[A-Za-z0-9]+'[A-Za-z0-9]+)|[A-Za-z0-9]+")
+def tokenize(s):
+ return [s.lower() for s in token_rgx.findall(s)]
+
 if __name__=="__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
 
@@ -127,7 +132,7 @@ if __name__=="__main__":
  vocab = set()
  vocab.add("__padding__")
  for datum in raw:
-  words = datum['t'].split()
+  words = tokenize(datum['t'])
   vocab.update(words)
 
  # print(vocab)
@@ -140,7 +145,7 @@ if __name__=="__main__":
  lens = Counter()
 
  for datum in raw:
-  words = datum['t'].split()
+  words = tokenize(datum['t'])
   word_indices = [ word_to_idx[word] for word in words ]
 
   lens[len(word_indices)] += 1
