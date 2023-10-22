@@ -7,11 +7,18 @@ import os
 import re
 import time
 
+
+from jax import config
+config.update("jax_enable_x64", True)
+
 import jax
+from jax import debug as jdbg
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrand
 from jax import tree_util as jtree
+
+from jax.experimental import checkify
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -22,7 +29,7 @@ import numpy as np
 
 #TODO Drop truncation / padding?
 
-LinearParams = Mapping[str, jnp.ndarray]
+# LinearParams = Mapping[str, jnp.ndarray]
 
 EMBEDDING_DIMS = 20
 fX = jnp.float32
@@ -188,28 +195,50 @@ def model(params, x):
  emb, *dense = params
 
  out = emb[x].sum(axis=1)
- for i, d in enumerate(dense):
-  out = out @ d['w'] + d['b']
-  if i < len(dense) - 1:
-   out = jnn.relu(out)
-  else:
-   out = jnn.sigmoid(out)
 
+ jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
+
+ out = out @ params[1]['w'] + params[1]['b']
+
+ jdbg.print(f"out.dtype {out.dtype} w.dtype {params[2]['w'].dtype} b.dtype {params[2]['b'].dtype}")
+ 
+ out = out @ params[2]['w'] + params[2]['b']
+
+ # for i, d in enumerate(dense):
+ #  out = out @ d['w'] + d['b']
+  # if i < len(dense) - 1:
+  #  out = jnn.elu(out)
+  # else:
+  #  out = jnn.sigmoid(out)
+
+ # return jnn.sigmoid(out.sum(axis=1))
  return out.sum(axis=1)
 
+errors = checkify.user_checks | checkify.index_checks | checkify.float_checks
+
 @jax.jit
-def loss(params, x, y):
+def loss_core(params, x, y):
  preds = model(params, x)
+ # jdbg.breakpoint()
+ jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
+ jdbg.print(f"preds.dtype {preds.dtype} y.dtype {y.dtype}")
+ checkify.check(preds.dtype == y.dtype, "preds dtype not equal to labels dtype")
+ checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
  delta = preds - y
- return jnp.mean(delta**2)
+ return jnp.mean(delta**2, dtype=fX)
 
-dloss = jax.grad(loss)
+loss = checkify.checkify(loss_core, errors)
 
-@jax.jit
-def update(params, x, y, lr=1e-1):
+dloss_core = jax.grad(loss_core)
+dloss = checkify.checkify(dloss_core, errors)
+
+# @jax.jit
+def update(params, x, y, lr=1e-3):
  # pred = model(params, x)
 
- grad = dloss(params, x, y)
+ grad_err, grad = dloss(params, x, y)
+
+ grad_err.throw()
 
  return jax.tree_map(
      lambda p, g: p - lr * g, params, grad
@@ -231,6 +260,9 @@ if __name__ == "__main__":
  for datum in raw:
   words = tokenize(datum['t'])
   vocab.update(words)
+
+ vocab = list(vocab)
+ vocab.sort()
 
  # print(vocab)
  vocab_len = len(vocab)
@@ -300,61 +332,70 @@ if __name__ == "__main__":
  x_val_raw, y_val_raw = unzip(val)
  x_test_raw, y_test_raw = unzip(val)
 
- x_train = jnp.array(list(x_train_raw))
+ x_train = jnp.array(list(x_train_raw), dtype=iX)
  del x_train_raw
  
- y_train = jnp.array(list(y_train_raw))
+ y_train = jnp.array(list(y_train_raw), dtype=fX)
  del y_train_raw
 
- x_val = jnp.array(list(x_val_raw))
+ x_val = jnp.array(list(x_val_raw), dtype=iX)
  del x_val_raw
 
- y_val = jnp.array(list(y_val_raw))
+ y_val = jnp.array(list(y_val_raw), dtype=fX)
  del y_val_raw
 
- x_test = jnp.array(list(x_test_raw))
+ x_test = jnp.array(list(x_test_raw), dtype=iX)
  del x_test_raw
  
- y_test = jnp.array(list(y_test_raw))
+ y_test = jnp.array(list(y_test_raw), dtype=fX)
  del y_test_raw
 
  print(f"x_train shape: {x_train.shape}")
  print(f"y_train shape: {y_train.shape}")
 
- print(x_train[:3])
- print(y_train[:3])
+ print(x_train[0][0])
+
+ # print(x_train[:3])
+ # print(y_train[:3])
 
 
  rng_key = jrand.PRNGKey(85439357)
  emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
 
  params = [
-  jrand.normal(rng_key, (vocab_len, EMBEDDING_DIMS,)),
+  jrand.normal(rng_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
   {
    'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
    'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
   },
   {
    'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
-   'b': jrand.normal(dense1_b_key, (1,))
+   'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
   }
  ]
 
+ loss_err, loss_val = loss(params, x_train, y_train)
+ loss_err.throw()
+ print(f"-1 loss: {loss_val}")
+
  start = time.time()
- for i in range(1000):
-  print(f"\r{i}     ")
+ for i in range(1000000):
+  # print(f"\r{i}     ")
   params = update(params, x_train, y_train)
 
-  val_preds = model(params, x_val)
+  # val_preds = model(params, x_val)
 
-  val_grads = dloss(params, x_val, y_val)
+  # val_grads = dloss(params, x_val, y_val)
 
-  print(f"val preds shape: {val_preds.shape}")
+  # print(f"val preds shape: {val_preds.shape}")
 
-  print(f"val grads: {val_grads}")
+  # print(f"val grads: {val_grads}")
   
+  loss_err, loss_val = loss(params, x_train, y_train)
 
-  print(f"{i} loss: {loss(params, x_train, y_train)}")
+  loss_err.throw()
+
+  print(f"{i} loss: {loss_val}")
 
  dur = time.time() - start
 
