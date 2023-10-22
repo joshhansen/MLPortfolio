@@ -217,7 +217,7 @@ def model(params, x):
 
 errors = checkify.user_checks | checkify.index_checks | checkify.float_checks
 
-# @jax.jit
+@jax.jit
 def loss_core(params, x, y):
  preds = model(params, x)
  # jdbg.breakpoint()
