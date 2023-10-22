@@ -31,7 +31,8 @@ import numpy as np
 
 # LinearParams = Mapping[str, jnp.ndarray]
 
-EMBEDDING_DIMS = 20
+# EMBEDDING_DIMS = 20
+EMBEDDING_DIMS = 4
 fX = jnp.float32
 iX = jnp.uint32
 # device = torch.device("cuda")
@@ -216,7 +217,7 @@ def model(params, x):
 
 errors = checkify.user_checks | checkify.index_checks | checkify.float_checks
 
-@jax.jit
+# @jax.jit
 def loss_core(params, x, y):
  preds = model(params, x)
  # jdbg.breakpoint()
@@ -233,7 +234,7 @@ dloss_core = jax.grad(loss_core)
 dloss = checkify.checkify(dloss_core, errors)
 
 # @jax.jit
-def update(params, x, y, lr=1e-3):
+def update(params, x, y, lr=1e-6):
  # pred = model(params, x)
 
  grad_err, grad = dloss(params, x, y)
@@ -302,6 +303,8 @@ if __name__ == "__main__":
    target_len = l
    break
 
+ # target_len = 100
+
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
 
@@ -363,7 +366,7 @@ if __name__ == "__main__":
  emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
 
  params = [
-  jrand.normal(rng_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
+  jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
   {
    'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
    'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
@@ -379,7 +382,7 @@ if __name__ == "__main__":
  print(f"-1 loss: {loss_val}")
 
  start = time.time()
- for i in range(1000000):
+ for i in range(100):
   # print(f"\r{i}     ")
   params = update(params, x_train, y_train)
 
