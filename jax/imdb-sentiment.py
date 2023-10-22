@@ -9,7 +9,7 @@ import time
 
 
 from jax import config
-config.update("jax_enable_x64", True)
+config.update("jax_debug_nans", True)
 
 import jax
 from jax import debug as jdbg
