@@ -29,6 +29,8 @@ fX = jnp.float32
 iX = jnp.uint32
 # device = torch.device("cuda")
 
+np.random.seed(48349834)
+
 np_rng = np.random.default_rng()
 def random_split(data, weights):
  parts = [ list() for _ in weights ]
