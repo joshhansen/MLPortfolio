@@ -29,8 +29,8 @@ import numpy as np
 
 import optax
 
-# EMBEDDING_DIMS = 20
-EMBEDDING_DIMS = 2
+EMBEDDING_DIMS = 20
+# EMBEDDING_DIMS = 2
 fX = jnp.float32
 iX = jnp.uint32
 
@@ -226,7 +226,7 @@ if __name__ == "__main__":
    target_len = l
    break
 
- target_len = 10
+ target_len = 50
 
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
