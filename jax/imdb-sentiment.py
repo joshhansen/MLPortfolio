@@ -8,8 +8,8 @@ import re
 import time
 
 
-# from jax import config
-# config.update("jax_debug_nans", True)
+from jax import config
+config.update("jax_debug_nans", True)
 
 import jax
 # from jax import debug as jdbg
@@ -27,7 +27,10 @@ from more_itertools import unzip
 
 import numpy as np
 
-EMBEDDING_DIMS = 20
+import optax
+
+# EMBEDDING_DIMS = 20
+EMBEDDING_DIMS = 2
 fX = jnp.float32
 iX = jnp.uint32
 
@@ -146,6 +149,29 @@ token_rgx = re.compile("(?:[A-Za-z0-9]+'[A-Za-z0-9]+)|[A-Za-z0-9]+")
 def tokenize(s):
  return [s.lower() for s in token_rgx.findall(s)]
 
+
+def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y) -> optax.Params:
+  opt_state = optimizer.init(params)
+
+  @jax.jit
+  def step(params, opt_state, batch, labels):
+    loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
+    updates, opt_state = optimizer.update(grads, opt_state, params)
+    params = optax.apply_updates(params, updates)
+    return params, opt_state, loss_value
+
+  x_shape_batched = (1, *x.shape)
+  y_shape_batched = (1, *y.shape)
+
+  for i in range(100):
+   for j, (batch, labels) in enumerate(zip(x.reshape(x_shape_batched), y.reshape(y_shape_batched))):
+    params, opt_state, loss_value = step(params, opt_state, batch, labels)
+   # if i % 100 == 0:
+   print(f'step {i}, loss: {loss_value}')
+
+  return params
+
+
 if __name__ == "__main__":
  path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
 
@@ -200,7 +226,7 @@ if __name__ == "__main__":
    target_len = l
    break
 
- # target_len = 100
+ target_len = 10
 
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
@@ -290,21 +316,24 @@ if __name__ == "__main__":
  best_params = params
  best_loss = val_loss
 
+ optimizer = optax.adam(learning_rate=1e-2)
+
  start = time.time()
- for i in range(10000):
-  params = update(params, x_train, y_train)
+ params = fit(params, optimizer, x_train, y_train)
+ # for i in range(10000):
+ #  params = update(params, x_train, y_train)
 
-  if i % 10 == 0:
-   train_loss = loss(params, x_train, y_train)
-   val_loss = loss(params, x_val, y_val)
-   val_preds = model(params, x_val).round()
-   val_acc = accuracy(val_preds, y_val)
+ #  if i % 10 == 0:
+ #   train_loss = loss(params, x_train, y_train)
+ #   val_loss = loss(params, x_val, y_val)
+ #   val_preds = model(params, x_val).round()
+ #   val_acc = accuracy(val_preds, y_val)
 
-   print(f"{i} train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
+ #   print(f"{i} train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
 
-   if val_loss < best_loss:
-    best_params = params
-    best_loss = val_loss 
+ #   if val_loss < best_loss:
+ #    best_params = params
+ #    best_loss = val_loss 
 
  dur = time.time() - start
 
@@ -313,7 +342,7 @@ if __name__ == "__main__":
 
  print(f"y_test shape: {y_test.shape}")
 
- preds = model(best_params, x_test).round()
+ preds = model(params, x_test).round()
 
  acc = accuracy(preds, y_test)
 
