@@ -8,11 +8,11 @@ import re
 import time
 
 
-from jax import config
-config.update("jax_debug_nans", True)
+# from jax import config
+# config.update("jax_debug_nans", True)
 
 import jax
-from jax import debug as jdbg
+# from jax import debug as jdbg
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrand
@@ -27,15 +27,9 @@ from more_itertools import unzip
 
 import numpy as np
 
-#TODO Drop truncation / padding?
-
-# LinearParams = Mapping[str, jnp.ndarray]
-
-# EMBEDDING_DIMS = 20
-EMBEDDING_DIMS = 4
+EMBEDDING_DIMS = 20
 fX = jnp.float32
 iX = jnp.uint32
-# device = torch.device("cuda")
 
 np.random.seed(48349834)
 
@@ -56,190 +50,86 @@ def random_split(data, weights):
 
  return parts
 
-  
-
-# class ObjectDataset(Dataset):
-#  def __init__(self, obj):
-#   self.obj = obj
-
-#  def __getitem__(self, i):
-#   return self.obj[i]
-
-#  def __len__(self):
-#   return len(self.obj)
-
-# class ImdbSentiment(LightningModule):
-#  def __init__(self, vocab_size):
-#   super().__init__()
-#   self.embedding = nn.Embedding(vocab_size, EMBEDDING_DIMS, dtype=fX)
-#   self.linear1 = nn.Linear(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX)
-#   self.linear2 = nn.Linear(EMBEDDING_DIMS // 2, 1, dtype=fX)
-
-#   self.acc = Accuracy(task='binary').to(device)
-#   self.auroc = AUROC(task='binary').to(device)
-#   self.f1score = F1Score(task='binary').to(device)
-
-#   self.metrics = [
-#    self.acc, self.auroc, self.f1score
-#   ]
-
-#  def params(self):
-#   return itertools.chain(self.embedding.parameters(), self.linear1.parameters(), self.linear2.parameters())
-
-#  def forward(self, x, y):
-#   emb = self.embedding(x)
-#   doc_emb = emb.sum(1)# sum over the word indices
-#   out1 = self.linear1(doc_emb)
-#   out2 = self.linear2(out1)
-
-#   # print(f"emb {emb.shape} {emb.dtype}")
-#   # print(f"doc_emb {doc_emb.shape} {doc_emb.dtype}")
-#   # print(f"out1 {out1.shape} {out1.dtype}")
-#   # print(f"out2 {out2.shape} {out2.dtype}")
-
-#   return torch.nn.functional.sigmoid(out2)
-
-#  def training_step(self, batch, batch_idx):
-#   inputs, target = batch
-#   # output = self(inputs, target)
-#   output = self.forward(inputs, target)
-#   # print(f"out shape: {output.shape} {output.dtype}")
-#   # print(f"target shape: {target.shape} {target.dtype}")
-
-#   target_resized = target.view(output.shape)
-#   loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
-
-#   self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-
-#   # Make specific predictions
-#   preds = output.round()
-
-#   for m in self.metrics:
-#    mval = m(preds, target_resized)
-#    self.log(f"test_{m.__class__.__name__}", mval, on_step=True, on_epoch=True, prog_bar=True)
-
-#   return loss
-
-#  def validation_step(self, batch, batch_idx):
-#   inputs, target = batch
-#   output = self.forward(inputs, target)
-
-#   target_resized = target.view(output.shape)
-#   loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
-
-#   self.log('test_loss', loss, prog_bar=True)
-
-#   # Make specific predictions
-#   preds = output.round()
-
-#   for m in self.metrics:
-#    mval = m(preds, target_resized)
-#    self.log(f"test_{m.__class__.__name__}", mval, prog_bar=True)
-
-#   return loss
-
-#  def test_step(self, batch, batch_idx):
-#   inputs, target = batch
-#   output = self.forward(inputs, target)
-
-#   target_resized = target.view(output.shape)
-#   loss = torch.nn.functional.binary_cross_entropy(output, target_resized)
-
-#   # Make specific predictions
-#   preds = output.round()
-
-#   self.log('test_loss', loss, prog_bar=True)
-
-#   for m in self.metrics:
-#    mval = m(preds, target_resized)
-#    self.log(f"test_{m.__class__.__name__}", mval, prog_bar=True)
-
-#   return loss
-  
-
-#  def configure_optimizers(self):
-#     return torch.optim.Adam(self.params(), lr=1e-3)
-
-# @jtree.register_pytree_node_class
-# class Dense:
-#  def __init__(self, rng_key, in_dims, out_dims, dtype=fX):
-#   self.rng_key, w_key, b_key = jrand.split(rng_key, 3)
-#   self.weights = jrand.normal(w_key, (in_dims, out_dims), dtype=dtype)
-#   self.biases = jrand.normal(b_key, (out_dims,), dtype=dtype)
-
-#  def __call__(self, x):
-#   return x @ self.weights + self.biases
-
-#  def tree_flatten(self):
-#   aux = {
-#    'rng_key': self.rng_key,
-#    'in_dims': self.weights.shape[0],
-#    'out_dims': self.weights.shape[1],
-#    'dtype': self.weights.dtype,
-#   }
-#   return ((self.weights, self.biases), aux)
-
-#  @classmethod
-#  def tree_unflatten(cls, aux, children):
-#   rng_key = aux['rng_key']
-#   in_dims = aux['in_dims']
-#   out_dims = aux['out_dims']
-#   dtype = aux['dtype']
-#   instance = cls(rng_key, in_dims, out_dims, dtype)
-
-#   instance.weights, instance.biases = children
-
-#   return instance
-
-
 def model(params, x):
  emb, *dense = params
 
+ # out = emb[x].mean(axis=1)
  out = emb[x].sum(axis=1)
 
- jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
+ # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
- out = out @ params[1]['w'] + params[1]['b']
+ # out = out @ params[1]['w'] + params[1]['b']
 
- jdbg.print(f"out.dtype {out.dtype} w.dtype {params[2]['w'].dtype} b.dtype {params[2]['b'].dtype}")
+ # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[2]['w'].dtype} b.dtype {params[2]['b'].dtype}")
  
- out = out @ params[2]['w'] + params[2]['b']
+ # out = out @ params[2]['w'] + params[2]['b']
 
- # for i, d in enumerate(dense):
- #  out = out @ d['w'] + d['b']
+ for i, d in enumerate(dense):
+  out = out @ d['w'] + d['b']
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
   # else:
   #  out = jnn.sigmoid(out)
 
- # return jnn.sigmoid(out.sum(axis=1))
- return out.sum(axis=1)
+ return jnn.sigmoid(out.mean(axis=1))
+ # return out.sum(axis=1)
+ # return out.mean(axis=1)
 
-errors = checkify.user_checks | checkify.index_checks | checkify.float_checks
+# errors = checkify.user_checks | checkify.index_checks | checkify.float_checks
+
+# log2, but adds a very small number to avoid division by zero
+# Assumes this doesn't produce more zeros!
+# def log2_safe(x):
+#  eps = jnp.full(x.shape, 1e-12, dtype=fX)
+#  return jnp.log2(x + eps)
+
+# def log2_safe_base(x):
+#  jnp.log2(x)
+
+# log2_safe = jax.vmap(log2_safe_base)
+
+def log2_safe(x):
+ log2 = jnp.log2(x)
+ return jnp.nan_to_num(log2, neginf=0.0) 
+
+def binary_cross_entropy(preds, y):
+ h = y * log2_safe(preds) + (1.0 - y) * log2_safe(1.0 - preds)
+
+ return -h.mean()
+
+def mean_squared_error(preds, y):
+ delta = preds - y
+ return jnp.mean(delta**2, dtype=fX)
+
+
 
 @jax.jit
 def loss_core(params, x, y):
  preds = model(params, x)
  # jdbg.breakpoint()
- jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
- jdbg.print(f"preds.dtype {preds.dtype} y.dtype {y.dtype}")
- checkify.check(preds.dtype == y.dtype, "preds dtype not equal to labels dtype")
- checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
- delta = preds - y
- return jnp.mean(delta**2, dtype=fX)
+ # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
+ # jdbg.print(f"preds.dtype {preds.dtype} y.dtype {y.dtype}")
+ # checkify.check(preds.dtype == y.dtype, "preds dtype not equal to labels dtype")
+ # checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
+ # delta = preds - y
+ # return jnp.mean(delta**2, dtype=fX)
+ # return binary_cross_entropy(preds, y)
+ return mean_squared_error(preds, y)
 
-loss = checkify.checkify(loss_core, errors)
 
-dloss_core = jax.grad(loss_core)
-dloss = checkify.checkify(dloss_core, errors)
+# loss = checkify.checkify(loss_core, errors)
 
-# @jax.jit
-def update(params, x, y, lr=1e-6):
+# dloss_core = jax.grad(loss_core)
+# dloss = checkify.checkify(dloss_core, errors)
+
+loss = loss_core
+dloss = jax.grad(loss_core)
+
+@jax.jit
+def update(params, x, y, lr=1e-2):
  # pred = model(params, x)
 
- grad_err, grad = dloss(params, x, y)
-
- grad_err.throw()
+ grad = dloss(params, x, y)
 
  return jax.tree_map(
      lambda p, g: p - lr * g, params, grad
@@ -365,24 +255,32 @@ if __name__ == "__main__":
  rng_key = jrand.PRNGKey(85439357)
  emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
 
+ initializer = jnn.initializers.glorot_uniform()
+
  params = [
   jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
   {
-   'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
+   # 'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
+   # 'w': initijnn.initializers.glorot_uniform(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX),
+   'w': initializer(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
    'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
   },
   {
-   'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
+   # 'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
+   # 'w': jnn.initializers.glorot_uniform(EMBEDDING_DIMS // 2, 1, dtype=fX),
+   'w': initializer(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
    'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
   }
  ]
 
- loss_err, loss_val = loss(params, x_train, y_train)
- loss_err.throw()
+ loss_val = loss(params, x_train, y_train)
  print(f"-1 loss: {loss_val}")
 
+ best_params = params
+ best_loss = loss_val
+
  start = time.time()
- for i in range(100):
+ for i in range(1000):
   # print(f"\r{i}     ")
   params = update(params, x_train, y_train)
 
@@ -393,12 +291,17 @@ if __name__ == "__main__":
   # print(f"val preds shape: {val_preds.shape}")
 
   # print(f"val grads: {val_grads}")
-  
-  loss_err, loss_val = loss(params, x_train, y_train)
 
-  loss_err.throw()
+  if i % 10 == 0:
+   loss_val = loss(params, x_val, y_val)
 
-  print(f"{i} loss: {loss_val}")
+   print(f"{i} loss: {loss_val}")
+
+   if loss_val < best_loss:
+    best_params = params
+    best_loss = loss_val
+
+   
 
  dur = time.time() - start
 
@@ -406,7 +309,7 @@ if __name__ == "__main__":
 
  print(f"y_test shape: {y_test.shape}")
 
- preds = model(params, x_test)
+ preds = model(best_params, x_test)
 
  print(f"preds shape: {preds.shape}")
 
@@ -424,22 +327,3 @@ if __name__ == "__main__":
 
  print(f"accuracy: {accuracy}")
 
- # matplotlib.use('qtagg')
- # plt.scatter(model(params, x_train), y_train)
- # plt.show()
-
- # w, b = params
- # print(f"w: {w:<.2f}, b: {b:<.2f}")
-
- # print(dir(train))
-
- # train_loader = DataLoader(train, shuffle=True, batch_size=100)
- # val_loader = DataLoader(val, batch_size=100)
- # test_loader = DataLoader(test, batch_size=100)
-
- # model = ImdbSentiment(len(vocab))
-
- # trainer = Trainer(max_epochs=50)
- # trainer.fit(model, train_loader, val_loader)
-
- # trainer.test(ckpt_path='best', dataloaders=test_loader)
