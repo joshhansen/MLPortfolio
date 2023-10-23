@@ -50,6 +50,13 @@ def random_split(data, weights):
 
  return parts
 
+def accuracy(preds, y):
+ matching = y == preds
+
+ correct = matching.sum()
+
+ return correct / x_test.shape[0]
+
 def model(params, x):
  emb, *dense = params
 
@@ -258,7 +265,8 @@ if __name__ == "__main__":
  initializer = jnn.initializers.glorot_uniform()
 
  params = [
-  jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
+  # jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
+  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
   {
    # 'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
    # 'w': initijnn.initializers.glorot_uniform(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX),
@@ -273,57 +281,41 @@ if __name__ == "__main__":
   }
  ]
 
- loss_val = loss(params, x_train, y_train)
- print(f"-1 loss: {loss_val}")
+ train_loss = loss(params, x_train, y_train)
+ val_loss = loss(params, x_val, y_val)
+ val_preds = model(params, x_val).round()
+ val_acc = accuracy(val_preds, y_val)
+ print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
 
  best_params = params
- best_loss = loss_val
+ best_loss = val_loss
 
  start = time.time()
- for i in range(1000):
-  # print(f"\r{i}     ")
+ for i in range(10000):
   params = update(params, x_train, y_train)
 
-  # val_preds = model(params, x_val)
-
-  # val_grads = dloss(params, x_val, y_val)
-
-  # print(f"val preds shape: {val_preds.shape}")
-
-  # print(f"val grads: {val_grads}")
-
   if i % 10 == 0:
-   loss_val = loss(params, x_val, y_val)
+   train_loss = loss(params, x_train, y_train)
+   val_loss = loss(params, x_val, y_val)
+   val_preds = model(params, x_val).round()
+   val_acc = accuracy(val_preds, y_val)
 
-   print(f"{i} loss: {loss_val}")
+   print(f"{i} train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
 
-   if loss_val < best_loss:
+   if val_loss < best_loss:
     best_params = params
-    best_loss = loss_val
-
-   
+    best_loss = val_loss 
 
  dur = time.time() - start
 
  print(f"duration: {dur}")
 
+
  print(f"y_test shape: {y_test.shape}")
 
- preds = model(best_params, x_test)
+ preds = model(best_params, x_test).round()
 
- print(f"preds shape: {preds.shape}")
+ acc = accuracy(preds, y_test)
 
- matching = y_test == preds
-
- print(f"matching shape: {matching.shape}")
-
- correct = matching.sum()
-
- print(f"# correct: {correct}")
-
- print(f"correct shape: {correct.shape}")
-
- accuracy = correct / x_test.shape[0]
-
- print(f"accuracy: {accuracy}")
+ print(f"accuracy: {acc}")
 
