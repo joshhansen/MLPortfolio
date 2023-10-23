@@ -225,7 +225,7 @@ if __name__ == "__main__":
    target_len = l
    break
 
- target_len = 200
+ target_len = 400
 
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
