@@ -29,7 +29,7 @@ import numpy as np
 
 import optax
 
-EMBEDDING_DIMS = 2
+EMBEDDING_DIMS = 20
 fX = jnp.float32
 iX = jnp.uint32
 
@@ -225,8 +225,6 @@ if __name__ == "__main__":
    target_len = l
    break
 
- target_len = 400
-
  print(f"target_len: {target_len}")
  print(f"padding_idx: {padding_idx}")
 
@@ -312,27 +310,10 @@ if __name__ == "__main__":
  val_acc = accuracy(val_preds, y_val)
  print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
 
- best_params = params
- best_loss = val_loss
-
- optimizer = optax.adam(learning_rate=1e-2)
+ optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
  params = fit(params, optimizer, x_train, y_train)
- # for i in range(10000):
- #  params = update(params, x_train, y_train)
-
- #  if i % 10 == 0:
- #   train_loss = loss(params, x_train, y_train)
- #   val_loss = loss(params, x_val, y_val)
- #   val_preds = model(params, x_val).round()
- #   val_acc = accuracy(val_preds, y_val)
-
- #   print(f"{i} train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
-
- #   if val_loss < best_loss:
- #    best_params = params
- #    best_loss = val_loss 
 
  dur = time.time() - start
 
