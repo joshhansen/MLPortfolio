@@ -149,7 +149,7 @@ def tokenize(s):
  return [s.lower() for s in token_rgx.findall(s)]
 
 
-def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y) -> optax.Params:
+def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epochs) -> optax.Params:
   opt_state = optimizer.init(params)
 
   @jax.jit
@@ -162,7 +162,7 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y) -> 
   x_shape_batched = (1, *x.shape)
   y_shape_batched = (1, *y.shape)
 
-  for i in range(100):
+  for i in range(epochs):
    for j, (batch, labels) in enumerate(zip(x.reshape(x_shape_batched), y.reshape(y_shape_batched))):
     params, opt_state, loss_value = step(params, opt_state, batch, labels)
    # if i % 100 == 0:
@@ -313,7 +313,7 @@ if __name__ == "__main__":
  optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
- params = fit(params, optimizer, x_train, y_train)
+ params = fit(params, optimizer, x_train, y_train, 50)
 
  dur = time.time() - start
 
