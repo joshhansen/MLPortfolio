@@ -14,6 +14,7 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader, random_split
 
 EMBEDDING_DIMS = 20
+ATTN_DIMS=5
 fX = torch.float64
 iX = torch.long
 device = torch.device("cuda")
@@ -32,6 +33,7 @@ class ImdbSentiment(LightningModule):
  def __init__(self, vocab_size):
   super().__init__()
   self.embedding = nn.Embedding(vocab_size, EMBEDDING_DIMS, dtype=fX)
+  self.attn = nn.MultiheadAttention(EMBEDDING_DIMS, ATTN_DIMS, dtype=fX)
   self.linear1 = nn.Linear(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX)
   self.linear2 = nn.Linear(EMBEDDING_DIMS // 2, 1, dtype=fX)
 
@@ -48,8 +50,8 @@ class ImdbSentiment(LightningModule):
 
  def forward(self, x, y):
   emb = self.embedding(x)
-  doc_emb = emb.sum(1)# sum over the word indices
-  out1 = self.linear1(doc_emb)
+  attn = self.attn(emb)
+  out1 = self.linear1(attn)
   out2 = self.linear2(out1)
 
   # print(f"emb {emb.shape} {emb.dtype}")
