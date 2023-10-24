@@ -1,3 +1,5 @@
+from imdb_sa_common import load
+
 from typing import Mapping
 
 from collections import Counter
@@ -22,32 +24,12 @@ from jax.experimental import checkify
 
 from more_itertools import unzip
 
-import numpy as np
-
 import optax
 
 EMBEDDING_DIMS = 20
 fX = jnp.float32
 iX = jnp.uint32
 
-np.random.seed(48349834)
-
-np_rng = np.random.default_rng()
-def random_split(data, weights):
- parts = [ list() for _ in weights ]
-
- for datum in data:
-  x = np_rng.random()
-
-  total = 0.0
-  for i, weight in enumerate(weights):
-   total += weight
-
-   if x <= total:
-    parts[i].append(datum)
-    break
-
- return parts
 
 def accuracy(preds, y):
  matching = y == preds
@@ -141,140 +123,6 @@ def update(params, x, y, lr=1e-2):
      lambda p, g: p - lr * g, params, grad
  )
 
-stopwords = set([
- 'i',
- 'me',
- 'my',
- 'myself',
- 'we',
- 'our',
- 'ours',
- 'ourselves',
- 'you',
- 'your',
- 'yours',
- 'yourself',
- 'yourselves',
- 'he',
- 'him',
- 'his',
- 'himself',
- 'she',
- 'her',
- 'hers',
- 'herself',
- 'it',
- 'its',
- 'itself',
- 'they',
- 'them',
- 'their',
- 'theirs',
- 'themselves',
- 'what',
- 'which',
- 'who',
- 'whom',
- 'this',
- 'that',
- 'these',
- 'those',
- 'am',
- 'is',
- 'are',
- 'was',
- 'were',
- 'be',
- 'been',
- 'being',
- 'have',
- 'has',
- 'had',
- 'having',
- 'do',
- 'does',
- 'did',
- 'doing',
- 'a',
- 'an',
- 'the',
- 'and',
- 'but',
- 'if',
- 'or',
- 'because',
- 'as',
- 'until',
- 'while',
- 'of',
- 'at',
- 'by',
- 'for',
- 'with',
- 'about',
- 'against',
- 'between',
- 'into',
- 'through',
- 'during',
- 'before',
- 'after',
- 'above',
- 'below',
- 'to',
- 'from',
- 'up',
- 'down',
- 'in',
- 'out',
- 'on',
- 'off',
- 'over',
- 'under',
- 'again',
- 'further',
- 'then',
- 'once',
- 'here',
- 'there',
- 'when',
- 'where',
- 'why',
- 'how',
- 'all',
- 'any',
- 'both',
- 'each',
- 'few',
- 'more',
- 'most',
- 'other',
- 'some',
- 'such',
- 'no',
- 'nor',
- 'not',
- 'only',
- 'own',
- 'same',
- 'so',
- 'than',
- 'too',
- 'very',
- 's',
- 't',
- 'can',
- 'will',
- 'just',
- 'don',
- 'should',
- 'now',
-])
-token_rgx = re.compile("[A-Za-z0-9]+")
-def tokenize(s):
- return [s.lower() for s in token_rgx.findall(s) if s.lower() not in stopwords]
-
-
 def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epochs) -> optax.Params:
   opt_state = optimizer.init(params)
 
@@ -298,109 +146,24 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epo
 
 
 if __name__ == "__main__":
- path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
-
- with open(path) as r:
-  raw = json.load(r)
-
+ data = load()
  
- vocab = set()
- vocab.add("__padding__")
- for datum in raw:
-  words = tokenize(datum['t'])
-  vocab.update(words)
+ x_train = jnp.array(data['x_train'], dtype=iX)
+ y_train = jnp.array(data['y_train'], dtype=fX)
+ x_val = jnp.array(data['x_val'], dtype=iX)
+ y_val = jnp.array(data['y_val'], dtype=fX)
+ x_test = jnp.array(data['x_test'], dtype=iX)
+ y_test = jnp.array(data['y_test'], dtype=fX)
+ vocab_len = data['vocab_len']
 
- vocab = list(vocab)
- vocab.sort()
-
- # print(vocab)
- vocab_len = len(vocab)
- print(f"vocab_len: {vocab_len}")
-
- word_to_idx = {word: i for i, word in enumerate(vocab)}
- padding_idx = word_to_idx["__padding__"]
-
- del vocab
-
- indexed: list[tuple[ list[int], int]] = list()
- lens: Counter = Counter()
-
- for datum in raw:
-  words = tokenize(datum['t'])
-  word_indices = [ word_to_idx[word] for word in words ]
-
-  lens[len(word_indices)] += 1
-
-  class_ = datum['s']
-  indexed.append((word_indices, class_))
- 
- del raw
- del word_to_idx
-
- sorted_lens: list[tuple[int,int]] = list(lens.items())
- sorted_lens.sort(key = lambda x: x[0])
- total_lens = lens.total()
- del lens
-
- cum = 0
- target_len = -1
- for l, n in sorted_lens:
-  cum += n
-  pct = cum / total_lens
-  if pct >= 0.95:
-   target_len = l
-   break
-
- print(f"target_len: {target_len}")
- print(f"padding_idx: {padding_idx}")
-
- del sorted_lens
-
- data = list()
- for x, y in indexed:
-  # Pad to target_len
-  if len(x) < target_len:
-   x.extend([padding_idx] * (target_len - len(x)))
-  else:
-   x = x[:target_len]
-
-  data.append((jnp.array(x, dtype=iX), jnp.array(y, dtype=fX)))
-
- del indexed
- 
- print(f"data: {len(data)}")
-
- train, val, test = random_split(data, [0.8, 0.1, 0.1])
  del data
-
- print(f"train: {len(train)}")
- print(f"val: {len(val)}")
- print(f"test: {len(test)}")
-
- x_train_raw, y_train_raw = unzip(train)
- x_val_raw, y_val_raw = unzip(val)
- x_test_raw, y_test_raw = unzip(val)
-
- x_train = jnp.array(list(x_train_raw), dtype=iX)
- del x_train_raw
- 
- y_train = jnp.array(list(y_train_raw), dtype=fX)
- del y_train_raw
-
- x_val = jnp.array(list(x_val_raw), dtype=iX)
- del x_val_raw
-
- y_val = jnp.array(list(y_val_raw), dtype=fX)
- del y_val_raw
-
- x_test = jnp.array(list(x_test_raw), dtype=iX)
- del x_test_raw
- 
- y_test = jnp.array(list(y_test_raw), dtype=fX)
- del y_test_raw
 
  print(f"x_train shape: {x_train.shape}")
  print(f"y_train shape: {y_train.shape}")
+ print(f"x_val shape: {x_val.shape}")
+ print(f"y_val shape: {y_val.shape}")
+ print(f"x_test shape: {x_test.shape}")
+ print(f"y_test shape: {y_test.shape}")
 
  print(x_train[0][0])
 
