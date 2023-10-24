@@ -1,0 +1,3 @@
+[submodule "imdb-sentiment-analysis/imdb-data"]
+	path = imdb-sentiment-analysis/imdb-data
+	url = https://github.com/nas5w/imdb-data.git
