@@ -146,7 +146,7 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epo
 
 
 if __name__ == "__main__":
- data = load()
+ data = load(True)
  
  x_train = jnp.array(data['x_train'], dtype=iX)
  y_train = jnp.array(data['y_train'], dtype=fX)

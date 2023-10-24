@@ -168,7 +168,7 @@ token_rgx = re.compile("[A-Za-z0-9]+")
 def tokenize(s):
  return [s.lower() for s in token_rgx.findall(s) if s.lower() not in stopwords]
 
-def load():
+def load(split: bool):
  path =  os.environ['PWD'] + "/../imdb-data/reviews.json"
 
  with open(path) as r:
@@ -246,16 +246,24 @@ def load():
  print(f"val: {len(val)}")
  print(f"test: {len(test)}")
 
- x_train, y_train = unzip(train)
- x_val, y_val = unzip(val)
- x_test, y_test = unzip(val)
+ if split:
+  x_train, y_train = unzip(train)
+  x_val, y_val = unzip(val)
+  x_test, y_test = unzip(val)
 
- return {
-  'x_train': list(x_train),
-  'y_train': list(y_train),
-  'x_val': list(x_val),
-  'y_val': list(y_val),
-  'x_test': list(x_test),
-  'y_test': list(y_test),
-  'vocab_len': vocab_len,
- }
+  return {
+   'x_train': list(x_train),
+   'y_train': list(y_train),
+   'x_val': list(x_val),
+   'y_val': list(y_val),
+   'x_test': list(x_test),
+   'y_test': list(y_test),
+   'vocab_len': vocab_len,
+  }
+ else:
+  return {
+   'train': train,
+   'val': val,
+   'test': test,
+   'vocab_len': vocab_len,
+  }

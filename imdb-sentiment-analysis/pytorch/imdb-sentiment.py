@@ -1,3 +1,5 @@
+from imdb_sa_common import load
+
 from collections import Counter
 import itertools
 import json
@@ -118,82 +120,25 @@ class ImdbSentiment(LightningModule):
  def configure_optimizers(self):
     return torch.optim.Adam(self.params(), lr=1e-3)
 
-token_rgx = re.compile("(?:[A-Za-z0-9]+'[A-Za-z0-9]+)|[A-Za-z0-9]+")
-def tokenize(s):
- return [s.lower() for s in token_rgx.findall(s)]
-
 if __name__=="__main__":
- path = os.environ['HOME'] + "/Data/com/github/nas5w/imdb-data/reviews.json"
+ data = load(False)
 
- with open(path) as r:
-  raw = json.load(r)
+ def tensorize(data):
+  def tensor(datum):
+   x, y = datum
+   return (torch.tensor(x, dtype=iX, device=device), torch.tensor(y, dtype=fX, device=device))
+  return list(map(tensor, data))
 
- 
- vocab = set()
- vocab.add("__padding__")
- for datum in raw:
-  words = tokenize(datum['t'])
-  vocab.update(words)
-
- # print(vocab)
- print(f"vocab_len: {len(vocab)}")
-
- word_to_idx = {word: i for i, word in enumerate(vocab)}
- padding_idx = word_to_idx["__padding__"]
-
- indexed = list()
- lens = Counter()
-
- for datum in raw:
-  words = tokenize(datum['t'])
-  word_indices = [ word_to_idx[word] for word in words ]
-
-  lens[len(word_indices)] += 1
-
-  class_ = datum['s']
-  indexed .append((word_indices, class_))
- 
- del raw
-
- sorted_lens = list(lens.items())
- sorted_lens.sort(key = lambda x: x[0])
- cum = 0
- target_len = None
- for l, n in sorted_lens:
-  cum += n
-  pct = cum / lens.total()
-  if pct >= 0.95:
-   target_len = l
-   break
-
- print(f"target_len: {target_len}")
- print(f"padding_idx: {padding_idx}")
-
- data = list()
- for x, y in indexed:
-  # Pad to target_len
-  if len(x) < target_len:
-   x.extend([padding_idx] * (target_len - len(x)))
-  else:
-   x = x[:target_len]
-
-  data.append((torch.tensor(x, dtype=iX, device=device), torch.tensor(y, dtype=fX, device=device)))
-
- del indexed
- 
- dataset = ObjectDataset(data)
-
- 
-
- train, val, test = random_split(dataset, [0.8, 0.1, 0.1])
-
- # print(dir(train))
+ train = tensorize(data['train'])
+ val = tensorize(data['val'])
+ test = tensorize(data['test'])
+ vocab_len = data['vocab_len']
 
  train_loader = DataLoader(train, shuffle=True, batch_size=100)
  val_loader = DataLoader(val, batch_size=100)
  test_loader = DataLoader(test, batch_size=100)
 
- model = ImdbSentiment(len(vocab))
+ model = ImdbSentiment(vocab_len)
 
  trainer = Trainer(max_epochs=50)
  trainer.fit(model, train_loader, val_loader)
