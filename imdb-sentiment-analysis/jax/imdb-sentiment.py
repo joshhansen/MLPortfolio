@@ -20,9 +20,6 @@ from jax import tree_util as jtree
 
 from jax.experimental import checkify
 
-import matplotlib
-import matplotlib.pyplot as plt
-
 from more_itertools import unzip
 
 import numpy as np
