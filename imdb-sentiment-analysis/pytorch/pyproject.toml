@@ -8,6 +8,7 @@ authors = ["Josh Hansen <git@joshhansen.tech>"]
 python = "^3.10"
 pytorch-lightning = "^2.0.9.post0"
 torchmetrics = "^1.2.0"
+more-itertools = "^10.1.0"
 
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.16.1"
