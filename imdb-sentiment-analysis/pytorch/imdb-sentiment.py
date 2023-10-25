@@ -30,10 +30,11 @@ class ObjectDataset(Dataset):
   return len(self.obj)
 
 class ImdbSentiment(LightningModule):
- def __init__(self, vocab_size):
+ def __init__(self, batch_size, vocab_size, target_len):
   super().__init__()
   self.embedding = nn.Embedding(vocab_size, EMBEDDING_DIMS, dtype=fX)
   self.attn = nn.MultiheadAttention(EMBEDDING_DIMS, ATTN_DIMS, dtype=fX)
+  self.attn_query = torch.rand((batch_size, target_len, EMBEDDING_DIMS), dtype=fX, device=device)
   self.linear1 = nn.Linear(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX)
   self.linear2 = nn.Linear(EMBEDDING_DIMS // 2, 1, dtype=fX)
 
@@ -50,8 +51,9 @@ class ImdbSentiment(LightningModule):
 
  def forward(self, x, y):
   emb = self.embedding(x)
-  attn = self.attn(emb)
-  out1 = self.linear1(attn)
+  attn = self.attn(self.attn_query, emb, emb)
+  doc_attn = attn[0].mean(1)# average over the word indices
+  out1 = self.linear1(doc_attn)
   out2 = self.linear2(out1)
 
   # print(f"emb {emb.shape} {emb.dtype}")
@@ -136,11 +138,17 @@ if __name__=="__main__":
  test = tensorize(data['test'])
  vocab_len = data['vocab_len']
 
- train_loader = DataLoader(train, shuffle=True, batch_size=100)
- val_loader = DataLoader(val, batch_size=100)
- test_loader = DataLoader(test, batch_size=100)
+ batch_size = 100
 
- model = ImdbSentiment(vocab_len)
+ dl_kwargs = {
+  'drop_last': True,
+  'batch_size': batch_size,
+ }
+ train_loader = DataLoader(train, shuffle=True, **dl_kwargs)
+ val_loader = DataLoader(val, **dl_kwargs)
+ test_loader = DataLoader(test, **dl_kwargs)
+
+ model = ImdbSentiment(batch_size, vocab_len, data['target_len'])
 
  trainer = Trainer(max_epochs=50)
  trainer.fit(model, train_loader, val_loader)

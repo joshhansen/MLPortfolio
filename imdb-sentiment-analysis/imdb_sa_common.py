@@ -259,6 +259,7 @@ def load(split: bool):
    'x_test': list(x_test),
    'y_test': list(y_test),
    'vocab_len': vocab_len,
+   'target_len': target_len,
   }
  else:
   return {
@@ -266,4 +267,5 @@ def load(split: bool):
    'val': val,
    'test': test,
    'vocab_len': vocab_len,
+   'target_len': target_len,
   }
