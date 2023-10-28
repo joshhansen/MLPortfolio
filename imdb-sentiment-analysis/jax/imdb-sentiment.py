@@ -27,6 +27,8 @@ from more_itertools import unzip
 import optax
 
 EMBEDDING_DIMS = 20
+ATTN_DIMS = 5
+ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
 
@@ -172,13 +174,23 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
+ emb_key, attn_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 6)
 
  initializer = jnn.initializers.glorot_uniform()
 
+ # params = {
+ #  'embedding': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
+ #  'self-attention': initializer(attn_key, ())
+ # }
+
  params = [
-  # jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
+  # Embedding
   initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
+
+  # Self-attention
+  #TODO
+
+  # FF layers
   {
    # 'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
    # 'w': initijnn.initializers.glorot_uniform(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX),
