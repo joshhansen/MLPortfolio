@@ -14,7 +14,7 @@ from jax import config
 config.update("jax_debug_nans", True)
 
 import jax
-# from jax import debug as jdbg
+from jax import debug as jdbg
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrand
@@ -27,7 +27,7 @@ from more_itertools import unzip
 import optax
 
 EMBEDDING_DIMS = 20
-ATTN_DIMS = 5
+ATTN_DIMS = 16
 ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
@@ -41,11 +41,15 @@ def accuracy(preds, y):
  return correct / x_test.shape[0]
 
 def model(params, x):
- emb, *dense = params
-
  # out = emb[x].mean(axis=1)
- out = emb[x].sum(axis=1)
+ out = params['emb'][x]
 
+ # jdbg.print("embedded shape: {shape}", shape=out.shape)
+
+ # jdbg.print("self-attn shape: {shape}", shape=params['self-attn'].shape)
+ 
+ out = (out @ params['self-attn']).mean(axis=1)
+ 
  # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
  # out = out @ params[1]['w'] + params[1]['b']
@@ -54,7 +58,7 @@ def model(params, x):
  
  # out = out @ params[2]['w'] + params[2]['b']
 
- for i, d in enumerate(dense):
+ for i, d in enumerate(params['ff']):
   out = out @ d['w'] + d['b']
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
@@ -178,32 +182,20 @@ if __name__ == "__main__":
 
  initializer = jnn.initializers.glorot_uniform()
 
- # params = {
- #  'embedding': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
- #  'self-attention': initializer(attn_key, ())
- # }
-
- params = [
-  # Embedding
-  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-
-  # Self-attention
-  #TODO
-
-  # FF layers
-  {
-   # 'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
-   # 'w': initijnn.initializers.glorot_uniform(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX),
-   'w': initializer(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
-   'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
-  },
-  {
-   # 'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
-   # 'w': jnn.initializers.glorot_uniform(EMBEDDING_DIMS // 2, 1, dtype=fX),
-   'w': initializer(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
-   'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
-  }
- ]
+ params = {
+  'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
+  'self-attn': initializer(attn_key, (EMBEDDING_DIMS, ATTN_DIMS)),
+  'ff': [
+   {
+    'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
+    'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
+   },
+   {
+    'w': initializer(dense1_w_key, (ATTN_DIMS// 2, 1), dtype=fX),
+    'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
+   }
+  ]
+ }
 
  train_loss = loss(params, x_train, y_train)
  val_loss = loss(params, x_val, y_val)
@@ -214,7 +206,7 @@ if __name__ == "__main__":
  optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
- params = fit(params, optimizer, x_train, y_train, 50)
+ params = fit(params, optimizer, x_train, y_train, 200)
 
  dur = time.time() - start
 
