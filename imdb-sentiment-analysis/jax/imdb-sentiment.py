@@ -28,6 +28,7 @@ import optax
 
 EMBEDDING_DIMS = 20
 ATTN_DIMS = 16
+ATTN_HEADS = 5
 ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
@@ -47,8 +48,19 @@ def model(params, x):
  # jdbg.print("embedded shape: {shape}", shape=out.shape)
 
  # jdbg.print("self-attn shape: {shape}", shape=params['self-attn'].shape)
- 
- out = (out @ params['self-attn']).mean(axis=1)
+
+ attns = [ (out @ attn).mean(axis=1) for attn in params['self-attn'] ]
+
+ for attn in attns:
+  jdbg.print("attn shape {shape}", shape=attn.shape)
+
+ out = jnp.concatenate(attns, axis=1)
+
+ jdbg.print("post stack shape: {shape}", shape=out.shape)
+
+ out = out @ params['self-attn-stack']
+
+ jdbg.print("post stackdot shape {shape}", shape=out.shape)
  
  # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
@@ -60,6 +72,7 @@ def model(params, x):
 
  for i, d in enumerate(params['ff']):
   out = out @ d['w'] + d['b']
+  jdbg.print("ff {i} shape {shape}", i=i, shape=d['w'].shape)
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
   # else:
@@ -178,20 +191,23 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, attn_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 6)
+ emb_key, attn_key, attn_stack_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 7)
 
  initializer = jnn.initializers.glorot_uniform()
 
+ ATTN_STACK = ATTN_DIMS * ATTN_HEADS
+
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'self-attn': initializer(attn_key, (EMBEDDING_DIMS, ATTN_DIMS)),
+  'self-attn': [initializer(attn_key, (EMBEDDING_DIMS, ATTN_DIMS), dtype=fX) for _ in range(ATTN_HEADS)], 
+  'self-attn-stack': jrand.uniform(attn_stack_key, (ATTN_STACK,), dtype=fX),
   'ff': [
    {
-    'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
-    'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
+    'w': initializer(dense0_w_key, (ATTN_STACK , ATTN_STACK // 2), dtype=fX),
+    'b': jrand.normal(dense0_b_key, (ATTN_STACK // 2,), dtype=fX)
    },
    {
-    'w': initializer(dense1_w_key, (ATTN_DIMS// 2, 1), dtype=fX),
+    'w': initializer(dense1_w_key, (ATTN_STACK // 2, 1), dtype=fX),
     'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
    }
   ]
