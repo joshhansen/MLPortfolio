@@ -1,3 +1,5 @@
+# TODO scale by root(d_k)
+# TODO Make sure we're applying attention across whole sequence
 from imdb_sa_common import load
 
 from typing import Mapping
@@ -26,9 +28,11 @@ from more_itertools import unzip
 
 import optax
 
+ITERATIONS = 500
 EMBEDDING_DIMS = 20
-ATTN_DIMS = 16
+ATTN_DIMS = 20
 ATTN_HEADS = 5
+ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
 ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
@@ -42,25 +46,30 @@ def accuracy(preds, y):
  return correct / x_test.shape[0]
 
 def model(params, x):
+
+ print(f"x shape {x.shape}")
+ 
  # out = emb[x].mean(axis=1)
  out = params['emb'][x]
+
+ print(f"embedded shape {out.shape}")
 
  # jdbg.print("embedded shape: {shape}", shape=out.shape)
 
  # jdbg.print("self-attn shape: {shape}", shape=params['self-attn'].shape)
 
- attns = [ (out @ attn).mean(axis=1) for attn in params['self-attn'] ]
+ attns = [ (out @ attn + params['self-attn-bs'][i]).mean(axis=1) for i, attn in enumerate(params['self-attn-ws']) ]
 
  for attn in attns:
-  jdbg.print("attn shape {shape}", shape=attn.shape)
+  print(f"attn shape {attn.shape}")
 
  out = jnp.concatenate(attns, axis=1)
 
- jdbg.print("post stack shape: {shape}", shape=out.shape)
+ print(f"post stack shape: {out.shape}")
 
- out = out @ params['self-attn-stack']
+ out = out * params['self-attn-stack']
 
- jdbg.print("post stackdot shape {shape}", shape=out.shape)
+ print(f"post stackdot shape {out.shape}")
  
  # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
@@ -71,8 +80,10 @@ def model(params, x):
  # out = out @ params[2]['w'] + params[2]['b']
 
  for i, d in enumerate(params['ff']):
+  print(f"ff {i} w shape {d['w'].shape}")
+  print(f"ff {i} b shape {d['b'].shape}")
   out = out @ d['w'] + d['b']
-  jdbg.print("ff {i} shape {shape}", i=i, shape=d['w'].shape)
+  print(f"ff {i} out shape {out.shape}")
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
   # else:
@@ -191,38 +202,51 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, attn_key, attn_stack_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 7)
+ emb_key, attn_ws_key, attn_bs_key, attn_stack_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 8)
+
+ attn_ws_keys = jrand.split(attn_ws_key, ATTN_HEADS)
+ attn_bs_keys = jrand.split(attn_bs_key, ATTN_HEADS)
 
  initializer = jnn.initializers.glorot_uniform()
 
- ATTN_STACK = ATTN_DIMS * ATTN_HEADS
-
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'self-attn': [initializer(attn_key, (EMBEDDING_DIMS, ATTN_DIMS), dtype=fX) for _ in range(ATTN_HEADS)], 
-  'self-attn-stack': jrand.uniform(attn_stack_key, (ATTN_STACK,), dtype=fX),
+  'self-attn-ws': [initializer(attn_ws_keys[i], (EMBEDDING_DIMS, ATTN_DIMS_PER_HEAD), dtype=fX) for i in range(ATTN_HEADS)], 
+  'self-attn-bs': [jrand.normal(attn_bs_keys[i], dtype=fX) for i in range(ATTN_HEADS)],
+  'self-attn-stack': jrand.normal(attn_stack_key, (ATTN_DIMS,), dtype=fX),
   'ff': [
    {
-    'w': initializer(dense0_w_key, (ATTN_STACK , ATTN_STACK // 2), dtype=fX),
-    'b': jrand.normal(dense0_b_key, (ATTN_STACK // 2,), dtype=fX)
+    'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
+    'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
    },
    {
-    'w': initializer(dense1_w_key, (ATTN_STACK // 2, 1), dtype=fX),
+    'w': initializer(dense1_w_key, (ATTN_DIMS// 2, 1), dtype=fX),
     'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
    }
   ]
  }
 
- train_loss = loss(params, x_train, y_train)
- val_loss = loss(params, x_val, y_val)
- val_preds = model(params, x_val).round()
- val_acc = accuracy(val_preds, y_val)
- print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
+ sizes = jtree.tree_map(lambda x: x.size, params)
+
+ print(f"sizes: {sizes}")
+
+ total_params = jtree.tree_reduce(lambda x,y: x+y, sizes)
+
+ print(f"total_params: {total_params}")
+
+ # total_params = sum(jax.tree_map(lambda x: x.size, params).values())
+ # print(f"total_params: {total_params}")
+
+ # train_loss = loss(params, x_train, y_train)
+ # val_loss = loss(params, x_val, y_val)
+ # val_preds = model(params, x_val).round()
+ # val_acc = accuracy(val_preds, y_val)
+ # print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
 
  optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
- params = fit(params, optimizer, x_train, y_train, 200)
+ params = fit(params, optimizer, x_train, y_train, ITERATIONS)
 
  dur = time.time() - start
 
