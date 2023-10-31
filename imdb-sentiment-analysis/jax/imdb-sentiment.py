@@ -14,6 +14,7 @@ import time
 
 from jax import config
 config.update("jax_debug_nans", True)
+config.update("jax_numpy_rank_promotion", "raise")
 
 import jax
 from jax import debug as jdbg
@@ -67,7 +68,8 @@ def model(params, x):
 
  print(f"post stack shape: {out.shape}")
 
- out = out * params['self-attn-stack']
+ with jax.numpy_rank_promotion("warn"):
+  out = out * params['self-attn-stack']
 
  print(f"post stackdot shape {out.shape}")
  
@@ -82,7 +84,10 @@ def model(params, x):
  for i, d in enumerate(params['ff']):
   print(f"ff {i} w shape {d['w'].shape}")
   print(f"ff {i} b shape {d['b'].shape}")
-  out = out @ d['w'] + d['b']
+
+  with jax.numpy_rank_promotion("warn"):
+   out = out @ d['w']
+   out = out + d['b']
   print(f"ff {i} out shape {out.shape}")
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
