@@ -125,6 +125,17 @@ def mean_squared_error(preds, y):
  return jnp.mean(delta**2, dtype=fX)
 
 
+def dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ d_k = q.shape[-1]
+ checkify.check(k.shape[-1] == d_k)
+ checkify.check(v.shape[-1] == d_k)
+
+ out = k @ q
+
+ out = out / jnp.sqrt(d_k)
+
+ out = jnn.softmax(out)
+
 
 @jax.jit
 def loss_core(params, x, y):
