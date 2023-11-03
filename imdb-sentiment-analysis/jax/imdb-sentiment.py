@@ -31,6 +31,7 @@ import optax
 
 ITERATIONS = 500
 EMBEDDING_DIMS = 20
+ATTN_QUERIES = 8
 ATTN_DIMS = 20
 ATTN_HEADS = 5
 ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
@@ -55,25 +56,11 @@ def model(params, x):
 
  print(f"embedded shape {out.shape}")
 
- # jdbg.print("embedded shape: {shape}", shape=out.shape)
+ out = batch_multihead_attention(params['attn'], out, out, out)
 
- # jdbg.print("self-attn shape: {shape}", shape=params['self-attn'].shape)
+ print(f"post-attn shape: {out.shape}")
 
- attns = [ (out @ attn + params['self-attn-bs'][i]).mean(axis=1) for i, attn in enumerate(params['self-attn-ws']) ]
-
- for attn in attns:
-  print(f"attn shape {attn.shape}")
-
- out = jnp.concatenate(attns, axis=1)
-
- print(f"post stack shape: {out.shape}")
-
- with jax.numpy_rank_promotion("warn"):
-  out = out * params['self-attn-stack']
-
- print(f"post stackdot shape {out.shape}")
- 
- # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
+  # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
  # out = out @ params[1]['w'] + params[1]['b']
 
@@ -125,16 +112,59 @@ def mean_squared_error(preds, y):
  return jnp.mean(delta**2, dtype=fX)
 
 
-def dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ n_q = q.shape[-2]
  d_k = q.shape[-1]
- checkify.check(k.shape[-1] == d_k)
- checkify.check(v.shape[-1] == d_k)
 
- out = k @ q
+ n_k = k.shape[-2]
+ checkify.check(d_k == k.shape[-1], "q and k d_k mismatch")
+
+ checkify.check(n_k == v.shape[-2], "k and v n_k mismatch")
+ d_v = v.shape[-1]
+ 
+ out = q @ k.transpose()
 
  out = out / jnp.sqrt(d_k)
 
  out = jnn.softmax(out)
+
+ return out @ v
+
+batch_scaled_dot_product_attention = jax.vmap(scaled_dot_product_attention, [0, 0, 0])
+
+def init_attention_head_params(rng_key, d_model: int, d_k_out: int, d_v_out: int):
+ rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
+ w_query = jrand.normal(rng_key_q, (d_model, d_k_out))
+ w_keys = jrand.normal(rng_key_k, (d_model, d_k_out))
+ w_values = jrand.normal(rng_key_v, (d_model, d_v_out))
+
+ return { 'w_query': w_query, 'w_keys': w_keys, 'w_values': w_values }
+
+
+def init_multihead_attention_params(rng_key, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
+ rng_keys = jrand.split(rng_key, n_heads + 1)
+
+ heads = [ init_attention_head_params(rng_keys[i], d_model, d_k_out, d_v_out) for i in range(n_heads) ]
+ w = jrand.normal(rng_keys[-1], (n_heads * d_k_out, ))
+
+ return { 'heads': heads, 'w': w }
+
+def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ attns = list()
+
+ for head in params['heads']:
+  q_head = q @ head['w_query']
+  k_head = k @ head['w_keys']
+  v_head = v @ head['w_values']
+
+  attns.append(scaled_dot_product_attention(q_head, k_head, v_head))
+
+ out = jnp.concatenate(attns, axis=1)
+
+ return out @ params['w']
+
+
+batch_multihead_attention = jax.vmap(multihead_attention, [None, 0, 0, 0])
 
 
 @jax.jit
@@ -190,7 +220,6 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epo
 
   return params
 
-
 if __name__ == "__main__":
  data = load(True)
  
@@ -218,18 +247,13 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, attn_ws_key, attn_bs_key, attn_stack_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 8)
-
- attn_ws_keys = jrand.split(attn_ws_key, ATTN_HEADS)
- attn_bs_keys = jrand.split(attn_bs_key, ATTN_HEADS)
+ emb_key, attn_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 6)
 
  initializer = jnn.initializers.glorot_uniform()
 
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'self-attn-ws': [initializer(attn_ws_keys[i], (EMBEDDING_DIMS, ATTN_DIMS_PER_HEAD), dtype=fX) for i in range(ATTN_HEADS)], 
-  'self-attn-bs': [jrand.normal(attn_bs_keys[i], dtype=fX) for i in range(ATTN_HEADS)],
-  'self-attn-stack': jrand.normal(attn_stack_key, (ATTN_DIMS,), dtype=fX),
+  'attn': init_multihead_attention_params(attn_key, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
   'ff': [
    {
     'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
