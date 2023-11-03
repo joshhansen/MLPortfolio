@@ -30,6 +30,7 @@ from more_itertools import unzip
 import optax
 
 ITERATIONS = 500
+BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
 ATTN_QUERIES = 8
 ATTN_DIMS = 20
@@ -217,7 +218,7 @@ def update(params, x, y, lr=1e-2):
      lambda p, g: p - lr * g, params, grad
  )
 
-def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epochs) -> optax.Params:
+def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.ndarray, y: jnp.ndarray, epochs: int, batch_size: int) -> optax.Params:
   opt_state = optimizer.init(params)
 
   # @jax.jit
@@ -230,13 +231,16 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epo
    print("applied")
    return params, opt_state, loss_value
 
-  x_shape_batched = (1, *x.shape)
-  y_shape_batched = (1, *y.shape)
+  x_shape_batched = (batch_size, *x.shape)
+  y_shape_batched = (batch_size, *y.shape)
 
   for i in range(epochs):
-   for j, (batch, labels) in enumerate(zip(x.reshape(x_shape_batched), y.reshape(y_shape_batched))):
-    params, opt_state, loss_value = step(params, opt_state, batch, labels)
-   # if i % 100 == 0:
+   for start in range(0, len(x), batch_size):
+    end = start + batch_size
+    x_batch = x[start:end]
+    y_batch = y[start:end]
+    params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+
    print(f'step {i}, loss: {loss_value}')
 
   return params
@@ -316,7 +320,8 @@ if __name__ == "__main__":
  optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
- params = fit(params, optimizer, x_train, y_train, ITERATIONS)
+
+ params = fit(params, optimizer, x_train, y_train, ITERATIONS, BATCH_SIZE)
 
  # dur = time.time() - start
 
