@@ -73,20 +73,12 @@ def model(params, x):
  
  # out = out @ params[2]['w'] + params[2]['b']
 
- for i, d in enumerate(params['ff']):
-  # print(f"ff {i} w shape {d['w'].shape}")
-  # print(f"ff {i} b shape {d['b'].shape}")
+ with jax.numpy_rank_promotion("warn"):
+  out = out @ params['linear1']['w']
+  out = out + params['linear1']['b']
 
-  with jax.numpy_rank_promotion("warn"):
-   out = out @ d['w']
-   out = out + d['b']
-  # print(f"ff {i} out shape {out.shape}")
-  # if i < len(dense) - 1:
-  #  out = jnn.elu(out)
-  # else:
-  #  out = jnn.sigmoid(out)
-
- # print(f"pre-sigmoid shape: {out.shape}")
+  out = out @ params['linear2']['w']
+  out = out + params['linear2']['b']
 
  out = out.mean(axis=-1)
 
@@ -279,25 +271,25 @@ if __name__ == "__main__":
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
   'attn': init_multihead_attention_params(attn_key, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
-  'ff': [
-   {
+  'linear1': {
     'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
     'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
    },
-   {
+  'linear2': {
     'w': initializer(dense1_w_key, (ATTN_DIMS// 2, 1), dtype=fX),
     'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
    }
-  ]
  }
 
- sizes = jtree.tree_map(lambda x: x.size, params)
+ total_size = 0
+ for layer_name, layer in params.items():
+  sizes = jtree.tree_map(lambda x: x.size, layer)
+  size = jtree.tree_reduce(lambda x,y: x+y, sizes)
+  print(f"{layer_name}: {size}")
 
- print(f"sizes: {sizes}")
+  total_size += size
 
- total_params = jtree.tree_reduce(lambda x,y: x+y, sizes)
-
- print(f"total_params: {total_params}")
+ print(f"total_size: {total_size}")
 
  shapes = jtree.tree_map(lambda x: x.shape, params)
 
@@ -314,7 +306,7 @@ if __name__ == "__main__":
 
  del initializer
  del sizes
- del total_params
+ del total_size
  del shapes
 
  optimizer = optax.adam(learning_rate=1e-3)
