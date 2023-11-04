@@ -29,7 +29,7 @@ from more_itertools import unzip
 
 import optax
 
-ITERATIONS = 500
+ITERATIONS = 50
 BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
 ATTN_QUERIES = 8
@@ -50,20 +50,20 @@ def accuracy(preds, y):
 
 def model(params, x):
 
- print(f"x shape {x.shape}")
+ # print(f"x shape {x.shape}")
  
  # out = emb[x].mean(axis=1)
  out = params['emb'][x]
 
- print(f"embedded shape {out.shape}")
+ # print(f"embedded shape {out.shape}")
 
  out = batch_multihead_attention(params['attn'], out, out, out)
 
- print(f"post-attn shape: {out.shape}")
+ # print(f"post-attn shape: {out.shape}")
 
  out = jnp.mean(out, axis=-2)
 
- print(f"post-attn-mean-shape: {out.shape}")
+ # print(f"post-attn-mean-shape: {out.shape}")
 
   # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
 
@@ -74,23 +74,23 @@ def model(params, x):
  # out = out @ params[2]['w'] + params[2]['b']
 
  for i, d in enumerate(params['ff']):
-  print(f"ff {i} w shape {d['w'].shape}")
-  print(f"ff {i} b shape {d['b'].shape}")
+  # print(f"ff {i} w shape {d['w'].shape}")
+  # print(f"ff {i} b shape {d['b'].shape}")
 
   with jax.numpy_rank_promotion("warn"):
    out = out @ d['w']
    out = out + d['b']
-  print(f"ff {i} out shape {out.shape}")
+  # print(f"ff {i} out shape {out.shape}")
   # if i < len(dense) - 1:
   #  out = jnn.elu(out)
   # else:
   #  out = jnn.sigmoid(out)
 
- print(f"pre-sigmoid shape: {out.shape}")
+ # print(f"pre-sigmoid shape: {out.shape}")
 
  out = out.mean(axis=-1)
 
- print(f"post-mean shape: {out.shape}")
+ # print(f"post-mean shape: {out.shape}")
 
  return jnn.sigmoid(out)
  # return out.sum(axis=1)
@@ -163,9 +163,9 @@ def init_multihead_attention_params(rng_key, n_heads: int, d_model: int, d_k_out
 def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
  attns = list()
 
- print(f"q shape: {q.shape}")
- print(f"k shape: {k.shape}")
- print(f"v shape: {v.shape}")
+ # print(f"q shape: {q.shape}")
+ # print(f"k shape: {k.shape}")
+ # print(f"v shape: {v.shape}")
 
  for head in params['heads']:
   q_head = q @ head['w_query']
@@ -176,7 +176,7 @@ def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) 
 
  attns_shapes = [ attn.shape for attn in attns ]
 
- print(f"attns_shapes: {attns_shapes}")
+ # print(f"attns_shapes: {attns_shapes}")
 
  out = jnp.concatenate(attns, axis=-1)
 
@@ -186,7 +186,7 @@ def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) 
 batch_multihead_attention = jax.vmap(multihead_attention, [None, 0, 0, 0])
 
 
-# @jax.jit
+@jax.jit
 def loss_core(params, x, y):
  preds = model(params, x)
  # jdbg.breakpoint()
@@ -208,7 +208,7 @@ def loss_core(params, x, y):
 loss = loss_core
 dloss = jax.grad(loss_core)
 
-# @jax.jit
+@jax.jit
 def update(params, x, y, lr=1e-2):
  # pred = model(params, x)
 
@@ -221,14 +221,14 @@ def update(params, x, y, lr=1e-2):
 def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.ndarray, y: jnp.ndarray, epochs: int, batch_size: int) -> optax.Params:
   opt_state = optimizer.init(params)
 
-  # @jax.jit
+  @jax.jit
   def step(params, opt_state, batch, labels):
    loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
-   print("got grads")
+   # print("got grads")
    updates, opt_state = optimizer.update(grads, opt_state, params)
-   print("updated")
+   # print("updated")
    params = optax.apply_updates(params, updates)
-   print("applied")
+   # print("applied")
    return params, opt_state, loss_value
 
   x_shape_batched = (batch_size, *x.shape)
@@ -323,16 +323,16 @@ if __name__ == "__main__":
 
  params = fit(params, optimizer, x_train, y_train, ITERATIONS, BATCH_SIZE)
 
- # dur = time.time() - start
+ dur = time.time() - start
 
- # print(f"duration: {dur}")
+ print(f"duration: {dur}")
 
 
- # print(f"y_test shape: {y_test.shape}")
+ print(f"y_test shape: {y_test.shape}")
 
- # preds = model(params, x_test).round()
+ preds = model(params, x_test).round()
 
- # acc = accuracy(preds, y_test)
+ acc = accuracy(preds, y_test)
 
- # print(f"accuracy: {acc}")
+ print(f"accuracy: {acc}")
 
