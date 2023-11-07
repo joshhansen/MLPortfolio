@@ -2,7 +2,7 @@
 # TODO Make sure we're applying attention across whole sequence
 from imdb_sa_common import load
 
-from typing import Mapping
+from typing import Generator, Mapping
 
 from collections import Counter
 import itertools
@@ -39,6 +39,24 @@ ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
 ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
+
+def batches(*arrays) -> Generator[jnp.ndarray, None, None]:
+ size = len(arrays[0])
+ for arr in arrays[1:]:
+  if len(arr) != size:
+   raise Error(f"Size of input {len(arr)} != {size}")
+
+ for start in range(0, size, BATCH_SIZE):
+  end = start + BATCH_SIZE
+
+  batches = [arr[start:end] for arr in arrays]
+
+  for batch in batches:
+   if len(batch) != BATCH_SIZE:
+    # We're at the end of the data where batches are incomplete; get outta here
+    return
+
+  yield batches
 
 
 def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
@@ -226,14 +244,8 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.nd
   y_shape_batched = (batch_size, *y.shape)
 
   for i in range(epochs):
-   for start in range(0, len(x), batch_size):
-    end = start + batch_size
-    x_batch = x[start:end]
-    y_batch = y[start:end]
-
-    # Check that we got a fully-filled batch; vmap complains otherwise
-    if len(x_batch) == batch_size:
-     params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+   for x_batch, y_batch in batches(x, y):
+    params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
 
    print(f'step {i}, loss: {loss_value}')
 
@@ -329,15 +341,9 @@ if __name__ == "__main__":
  preds = list()
  ys = list()
 
- for start in range(0, len(x_test), BATCH_SIZE):
-  end = start + BATCH_SIZE
-
-  x = x_test[start:end]
-  y = y_test[start:end]
-
-  if len(x) == BATCH_SIZE:
-   preds.append(model(params, x).round())
-   ys.append(y)
+ for x,y in batches(x_test, y_test):
+  preds.append(model(params, x).round())
+  ys.append(y)
 
  relevant_preds = jnp.concatenate(preds)
  relevant_ys = jnp.concatenate(ys)
