@@ -1,5 +1,3 @@
-# TODO scale by root(d_k)
-# TODO Make sure we're applying attention across whole sequence
 from imdb_sa_common import load
 
 from typing import Generator, Mapping
