@@ -194,7 +194,7 @@ def init_multihead_attention_params(rng_key, n_heads: int, d_model: int, d_k_out
 
 
 @jax.jit
-def loss_core(params, x: jnp.ndarray, y: jnp.ndarray):
+def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  preds = model(params, x)
  # jdbg.breakpoint()
  # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
@@ -206,26 +206,7 @@ def loss_core(params, x: jnp.ndarray, y: jnp.ndarray):
  # return binary_cross_entropy(preds, y)
  return mean_squared_error(preds, y)
 
-
-# loss = checkify.checkify(loss_core, errors)
-
-# dloss_core = jax.grad(loss_core)
-# dloss = checkify.checkify(dloss_core, errors)
-
-loss = loss_core
-dloss = jax.grad(loss_core)
-
-@jax.jit
-def update(params, x, y, lr=1e-2):
- # pred = model(params, x)
-
- grad = dloss(params, x, y)
-
- return jax.tree_map(
-     lambda p, g: p - lr * g, params, grad
- )
-
-def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.ndarray, y: jnp.ndarray, epochs: int, batch_size: int) -> optax.Params:
+def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.ndarray, y: jnp.ndarray, epochs: int) -> optax.Params:
   opt_state = optimizer.init(params)
 
   @jax.jit
@@ -237,9 +218,6 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.nd
    params = optax.apply_updates(params, updates)
    # print("applied")
    return params, opt_state, loss_value
-
-  x_shape_batched = (batch_size, *x.shape)
-  y_shape_batched = (batch_size, *y.shape)
 
   for i in range(epochs):
    for x_batch, y_batch in batches(x, y):
