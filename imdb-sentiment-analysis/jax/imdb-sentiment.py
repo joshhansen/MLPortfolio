@@ -41,6 +41,48 @@ fX = jnp.float32
 iX = jnp.uint32
 
 
+def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ n_q = q.shape[-2]
+ d_k = q.shape[-1]
+
+ n_k = k.shape[-2]
+ # checkify.check(d_k == k.shape[-1], "q and k d_k mismatch")
+
+ # checkify.check(n_k == v.shape[-2], "k and v n_k mismatch")
+ d_v = v.shape[-1]
+ 
+ out = q @ k.transpose()
+
+ out = out / jnp.sqrt(d_k)
+
+ out = jnn.softmax(out)
+
+ return out @ v
+
+def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ attns = list()
+
+ # print(f"q shape: {q.shape}")
+ # print(f"k shape: {k.shape}")
+ # print(f"v shape: {v.shape}")
+
+ for head in params['heads']:
+  q_head = q @ head['w_query']
+  k_head = k @ head['w_keys']
+  v_head = v @ head['w_values']
+
+  attns.append(scaled_dot_product_attention(q_head, k_head, v_head))
+
+ # attns_shapes = [ attn.shape for attn in attns ]
+
+ # print(f"attns_shapes: {attns_shapes}")
+
+ out = jnp.concatenate(attns, axis=-1)
+
+ return out @ params['w']
+
+batch_multihead_attention = jax.vmap(multihead_attention, [None, 0, 0, 0])
+
 def accuracy(preds, y):
  matching = y == preds
 
@@ -48,7 +90,7 @@ def accuracy(preds, y):
 
  return correct / x_test.shape[0]
 
-def model(params, x):
+def model(params, x: jnp.ndarray):
 
  # print(f"x shape {x.shape}")
  
@@ -57,7 +99,7 @@ def model(params, x):
 
  # print(f"embedded shape {out.shape}")
 
- out = batch_multihead_attention(params['attn'], out, out, out)
+ out = batch_multihead_attention(params['attn'], params['attn-query'], out, out)
 
  # print(f"post-attn shape: {out.shape}")
 
@@ -115,25 +157,6 @@ def mean_squared_error(preds, y):
  return jnp.mean(delta**2, dtype=fX)
 
 
-def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
- n_q = q.shape[-2]
- d_k = q.shape[-1]
-
- n_k = k.shape[-2]
- # checkify.check(d_k == k.shape[-1], "q and k d_k mismatch")
-
- # checkify.check(n_k == v.shape[-2], "k and v n_k mismatch")
- d_v = v.shape[-1]
- 
- out = q @ k.transpose()
-
- out = out / jnp.sqrt(d_k)
-
- out = jnn.softmax(out)
-
- return out @ v
-
-batch_scaled_dot_product_attention = jax.vmap(scaled_dot_product_attention, [0, 0, 0])
 
 def init_attention_head_params(rng_key, d_model: int, d_k_out: int, d_v_out: int):
  rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
@@ -152,34 +175,10 @@ def init_multihead_attention_params(rng_key, n_heads: int, d_model: int, d_k_out
 
  return { 'heads': heads, 'w': w }
 
-def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
- attns = list()
-
- # print(f"q shape: {q.shape}")
- # print(f"k shape: {k.shape}")
- # print(f"v shape: {v.shape}")
-
- for head in params['heads']:
-  q_head = q @ head['w_query']
-  k_head = k @ head['w_keys']
-  v_head = v @ head['w_values']
-
-  attns.append(scaled_dot_product_attention(q_head, k_head, v_head))
-
- attns_shapes = [ attn.shape for attn in attns ]
-
- # print(f"attns_shapes: {attns_shapes}")
-
- out = jnp.concatenate(attns, axis=-1)
-
- return out @ params['w']
-
-
-batch_multihead_attention = jax.vmap(multihead_attention, [None, 0, 0, 0])
 
 
 @jax.jit
-def loss_core(params, x, y):
+def loss_core(params, x: jnp.ndarray, y: jnp.ndarray):
  preds = model(params, x)
  # jdbg.breakpoint()
  # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
@@ -231,7 +230,10 @@ def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.nd
     end = start + batch_size
     x_batch = x[start:end]
     y_batch = y[start:end]
-    params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+
+    # Check that we got a fully-filled batch; vmap complains otherwise
+    if len(x_batch) == batch_size:
+     params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
 
    print(f'step {i}, loss: {loss_value}')
 
@@ -247,6 +249,7 @@ if __name__ == "__main__":
  x_test = jnp.array(data['x_test'], dtype=iX)
  y_test = jnp.array(data['y_test'], dtype=fX)
  vocab_len = data['vocab_len']
+ target_len = data['target_len']
 
  del data
 
@@ -264,13 +267,14 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, attn_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 6)
+ emb_key, attn_key, attn_query_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 7)
 
  initializer = jnn.initializers.glorot_uniform()
 
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
   'attn': init_multihead_attention_params(attn_key, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
+  'attn-query': jrand.normal(attn_query_key, (BATCH_SIZE, target_len, EMBEDDING_DIMS), dtype=fX),
   'linear1': {
     'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
     'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
@@ -322,9 +326,23 @@ if __name__ == "__main__":
 
  print(f"y_test shape: {y_test.shape}")
 
- preds = model(params, x_test).round()
+ preds = list()
+ ys = list()
 
- acc = accuracy(preds, y_test)
+ for start in range(0, len(x_test), BATCH_SIZE):
+  end = start + BATCH_SIZE
+
+  x = x_test[start:end]
+  y = y_test[start:end]
+
+  if len(x) == BATCH_SIZE:
+   preds.append(model(params, x).round())
+   ys.append(y)
+
+ relevant_preds = jnp.concatenate(preds)
+ relevant_ys = jnp.concatenate(ys)
+
+ acc = accuracy(relevant_preds, relevant_ys)
 
  print(f"accuracy: {acc}")
 
