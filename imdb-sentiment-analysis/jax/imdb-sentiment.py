@@ -97,7 +97,7 @@ def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) 
 
  return out @ params['w']
 
-batch_multihead_attention = jax.vmap(multihead_attention, [None, 0, 0, 0])
+batch_multihead_attention = jax.vmap(multihead_attention, [None, None, 0, 0])
 
 def accuracy(preds, y):
  matching = y == preds
@@ -174,20 +174,20 @@ def mean_squared_error(preds, y):
 
 
 
-def init_attention_head_params(rng_key, d_model: int, d_k_out: int, d_v_out: int):
+def init_attention_head_params(rng_key, init: jnn.initializers.Initializer, d_model: int, d_k_out: int, d_v_out: int):
  rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
- w_query = jrand.normal(rng_key_q, (d_model, d_k_out))
- w_keys = jrand.normal(rng_key_k, (d_model, d_k_out))
- w_values = jrand.normal(rng_key_v, (d_model, d_v_out))
+ w_query = init(rng_key_q, (d_model, d_k_out), dtype=fX)
+ w_keys = init(rng_key_k, (d_model, d_k_out), dtype=fX)
+ w_values = init(rng_key_v, (d_model, d_v_out), dtype=fX)
 
  return { 'w_query': w_query, 'w_keys': w_keys, 'w_values': w_values }
 
 
-def init_multihead_attention_params(rng_key, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
+def init_multihead_attention_params(rng_key, init: jnn.initializers.Initializer, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
  rng_keys = jrand.split(rng_key, n_heads + 1)
 
- heads = [ init_attention_head_params(rng_keys[i], d_model, d_k_out, d_v_out) for i in range(n_heads) ]
- w = jrand.normal(rng_keys[-1], (n_heads * d_k_out, d_model))
+ heads = [ init_attention_head_params(rng_keys[i], init, d_model, d_k_out, d_v_out) for i in range(n_heads) ]
+ w = init(rng_keys[-1], (n_heads * d_k_out, d_model), dtype=fX)
 
  return { 'heads': heads, 'w': w }
 
@@ -261,8 +261,8 @@ if __name__ == "__main__":
 
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'attn': init_multihead_attention_params(attn_key, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
-  'attn-query': jrand.normal(attn_query_key, (BATCH_SIZE, target_len, EMBEDDING_DIMS), dtype=fX),
+  'attn': init_multihead_attention_params(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
+  'attn-query': initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX),
   'linear1': {
     'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
     'b': jrand.normal(dense0_b_key, (ATTN_DIMS// 2,), dtype=fX)
@@ -305,7 +305,7 @@ if __name__ == "__main__":
 
  start = time.time()
 
- params = fit(params, optimizer, x_train, y_train, ITERATIONS, BATCH_SIZE)
+ params = fit(params, optimizer, x_train, y_train, ITERATIONS)
 
  dur = time.time() - start
 
