@@ -75,27 +75,49 @@ def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray)
 
  return out @ v
 
-def multihead_attention(params, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+class AttentionParams:
+ w_query: jnp.ndarray
+ w_keys: jnp.ndarray
+ w_values: jnp.ndarray
+
+ def __init__(self, rng_key, init: jnn.initializers.Initializer, d_model: int, d_k_out: int, d_v_out: int):
+  rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
+  self.w_query = init(rng_key_q, (d_model, d_k_out), dtype=fX)
+  self.w_keys = init(rng_key_k, (d_model, d_k_out), dtype=fX)
+  self.w_values = init(rng_key_v, (d_model, d_v_out), dtype=fX)
+
+class MultiheadAttentionParams:
+ heads: list[AttentionParams]
+ w: jnp.ndarray
+
+ def __init__(self, rng_key, init: jnn.initializers.Initializer, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
+  rng_keys = jrand.split(rng_key, n_heads + 1)
+
+  heads = [ AttentionParams(rng_keys[i], init, d_model, d_k_out, d_v_out) for i in range(n_heads) ]
+  w = init(rng_keys[-1], (n_heads * d_k_out, d_model), dtype=fX)
+
+ 
+def multihead_attention(params: MultiheadAttentionParams, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
  attns = list()
 
- # print(f"q shape: {q.shape}")
- # print(f"k shape: {k.shape}")
- # print(f"v shape: {v.shape}")
+ print(f"q shape: {q.shape}")
+ print(f"k shape: {k.shape}")
+ print(f"v shape: {v.shape}")
 
- for head in params['heads']:
-  q_head = q @ head['w_query']
-  k_head = k @ head['w_keys']
-  v_head = v @ head['w_values']
+ for head in params.heads:
+  q_head = q @ head.w_query
+  k_head = k @ head.w_keys
+  v_head = v @ head.w_values
 
   attns.append(scaled_dot_product_attention(q_head, k_head, v_head))
 
- # attns_shapes = [ attn.shape for attn in attns ]
+ attns_shapes = [ attn.shape for attn in attns ]
 
- # print(f"attns_shapes: {attns_shapes}")
+ print(f"attns_shapes: {attns_shapes}")
 
  out = jnp.concatenate(attns, axis=-1)
 
- return out @ params['w']
+ return out @ params.w
 
 batch_multihead_attention = jax.vmap(multihead_attention, [None, None, 0, 0])
 
@@ -108,22 +130,20 @@ def accuracy(preds, y):
 
 def model(params, x: jnp.ndarray):
 
- # print(f"x shape {x.shape}")
+ print(f"x shape {x.shape}")
  
  # out = emb[x].mean(axis=1)
  out = params['emb'][x]
 
- # print(f"embedded shape {out.shape}")
+ print(f"embedded shape {out.shape}")
 
  out = batch_multihead_attention(params['attn'], params['attn-query'], out, out)
 
- # print(f"post-attn shape: {out.shape}")
+ print(f"post-attn shape: {out.shape}")
 
  out = jnp.mean(out, axis=-2)
 
- # print(f"post-attn-mean-shape: {out.shape}")
-
-  # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
+ print(f"post-attn-mean-shape: {out.shape}")
 
  # out = out @ params[1]['w'] + params[1]['b']
 
@@ -135,10 +155,16 @@ def model(params, x: jnp.ndarray):
   out = out @ params['linear1']['w']
   out = out + params['linear1']['b']
 
+  print(f"post-linear1 shape: {out.shape}")
+
   out = out @ params['linear2']['w']
   out = out + params['linear2']['b']
 
+  print(f"post-linear2 shape: {out.shape}")
+
  out = out.mean(axis=-1)
+
+ print(f"post-dense-mean shape: {out.shape}")
 
  # print(f"post-mean shape: {out.shape}")
 
@@ -171,27 +197,6 @@ def binary_cross_entropy(preds, y):
 def mean_squared_error(preds, y):
  delta = preds - y
  return jnp.mean(delta**2, dtype=fX)
-
-
-
-def init_attention_head_params(rng_key, init: jnn.initializers.Initializer, d_model: int, d_k_out: int, d_v_out: int):
- rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
- w_query = init(rng_key_q, (d_model, d_k_out), dtype=fX)
- w_keys = init(rng_key_k, (d_model, d_k_out), dtype=fX)
- w_values = init(rng_key_v, (d_model, d_v_out), dtype=fX)
-
- return { 'w_query': w_query, 'w_keys': w_keys, 'w_values': w_values }
-
-
-def init_multihead_attention_params(rng_key, init: jnn.initializers.Initializer, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
- rng_keys = jrand.split(rng_key, n_heads + 1)
-
- heads = [ init_attention_head_params(rng_keys[i], init, d_model, d_k_out, d_v_out) for i in range(n_heads) ]
- w = init(rng_keys[-1], (n_heads * d_k_out, d_model), dtype=fX)
-
- return { 'heads': heads, 'w': w }
-
-
 
 @jax.jit
 def loss(params, x: jnp.ndarray, y: jnp.ndarray):
@@ -290,7 +295,7 @@ if __name__ == "__main__":
 
  params = {
   'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'attn': init_multihead_attention_params(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
+  'attn': MultiheadAttentionParams(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
   'attn-query': initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX),
   'linear1': {
     'w': initializer(dense0_w_key, (ATTN_DIMS, ATTN_DIMS// 2), dtype=fX),
