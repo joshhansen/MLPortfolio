@@ -316,15 +316,6 @@ if __name__ == "__main__":
 
  print(f"shapes: {shapes}")
 
- # total_params = sum(jax.tree_map(lambda x: x.size, params).values())
- # print(f"total_params: {total_params}")
-
- # train_loss = loss(params, x_train, y_train)
- # val_loss = loss(params, x_val, y_val)
- # val_preds = model(params, x_val).round()
- # val_acc = accuracy(val_preds, y_val)
- # print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
-
  del initializer
  del sizes
  del total_size
