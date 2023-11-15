@@ -47,7 +47,7 @@ class ImdbSentiment(LightningModule):
   ]
 
  def params(self):
-  return itertools.chain(self.embedding.parameters(), self.linear1.parameters(), self.linear2.parameters())
+  return itertools.chain(self.embedding.parameters(), self.attn.parameters(), self.attn_query, self.linear1.parameters(), self.linear2.parameters())
 
  def forward(self, x, y):
   emb = self.embedding(x)
