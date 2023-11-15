@@ -151,6 +151,34 @@ def unflatten_Linear(aux_data: str, flat_contents: list[jnp.ndarray]) -> Linear:
 
 jax.tree_util.register_pytree_node(Linear, flatten_Linear, unflatten_Linear)
 
+@dataclass
+class Params:
+ emb: jnp.ndarray
+ attn: MultiheadAttentionParams
+ attn_query: jnp.ndarray
+ linear1: Linear
+ linear2: Linear
+
+ @classmethod
+ def initialize(cls, key, vocab_len):
+  emb_key, attn_key, attn_query_key, linear1_key, linear2_key = jrand.split(key, 5)
+  emb =  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX)
+  attn =  MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS)
+  attn_query = initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX)
+  linear1 =  Linear.initialize(linear1_key, ATTN_DIMS, ATTN_DIMS // 2, fX)
+  linear2 =  Linear.initialize(linear2_key, ATTN_DIMS // 2, 1, fX)
+
+  return cls(emb, attn, attn_query, linear1, linear2)
+
+
+def flatten_Params(params: Params) -> Tuple[list[jnp.ndarray], None]:
+ return ([params.emb, params.attn, params.attn_query, params.linear1, params.linear2], None)
+
+def unflatten_Params(aux_data: str, flat_contents: list[jnp.ndarray]) -> Params:
+ return Params(*flat_contents)
+
+jax.tree_util.register_pytree_node(Params, flatten_Params, unflatten_Params)
+
 def multihead_attention(params: MultiheadAttentionParams, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
  attns = list()
 
@@ -182,15 +210,15 @@ def accuracy(preds, y):
 
  return correct / x_test.shape[0]
 
-def model(params, x: jnp.ndarray):
+def model(params: Params, x: jnp.ndarray):
  # print(f"x shape {x.shape}")
  
  # out = emb[x].mean(axis=1)
- out = params['emb'][x]
+ out = params.emb[x]
 
  # print(f"embedded shape {out.shape}")
 
- out = batch_multihead_attention(params['attn'], params['attn-query'], out, out)
+ out = batch_multihead_attention(params.attn, params.attn_query, out, out)
 
  # print(f"post-attn shape: {out.shape}")
 
@@ -199,11 +227,11 @@ def model(params, x: jnp.ndarray):
  # print(f"post-attn-mean-shape: {out.shape}")
 
  with jax.numpy_rank_promotion("warn"):
-  out = params['linear1'](out)
+  out = params.linear1(out)
 
   # print(f"post-linear1 shape: {out.shape}")
 
-  out = params['linear2'](out)
+  out = params.linear2(out)
 
   # print(f"post-linear2 shape: {out.shape}")
 
@@ -338,16 +366,10 @@ if __name__ == "__main__":
 
  initializer = jnn.initializers.glorot_uniform()
 
- params = {
-  'emb': initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  'attn': MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS),
-  'attn-query': initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX),
-  'linear1': Linear.initialize(dense0_key, ATTN_DIMS, ATTN_DIMS // 2, fX),
-  'linear2': Linear.initialize(dense1_key, ATTN_DIMS // 2, 1, fX),
- }
+ params = Params.initialize(rng_key, vocab_len)
 
  total_size = 0
- for layer_name, layer in params.items():
+ for layer_name, layer in params.__dict__.items():
   sizes = jtree.tree_map(lambda x: x.size, layer)
   size = jtree.tree_reduce(lambda x,y: x+y, sizes)
   print(f"{layer_name}: {size}")
