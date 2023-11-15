@@ -27,7 +27,7 @@ from more_itertools import unzip
 
 import optax
 
-ITERATIONS = 50
+ITERATIONS = 100
 BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
 ATTN_QUERIES = 8
@@ -206,26 +206,55 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  # return binary_cross_entropy(preds, y)
  return mean_squared_error(preds, y)
 
-def fit(params: optax.Params, optimizer: optax.GradientTransformation, x: jnp.ndarray, y: jnp.ndarray, epochs: int) -> optax.Params:
-  opt_state = optimizer.init(params)
+def fit(
+ params,
+ optimizer: optax.GradientTransformation,
+ x_train: jnp.ndarray,
+ y_train: jnp.ndarray,
+ x_val: jnp.ndarray,
+ y_val: jnp.ndarray,
+ epochs: int
+) -> optax.Params:
+ opt_state = optimizer.init(params)
 
-  @jax.jit
-  def step(params, opt_state, batch, labels):
-   loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
-   # print("got grads")
-   updates, opt_state = optimizer.update(grads, opt_state, params)
-   # print("updated")
-   params = optax.apply_updates(params, updates)
-   # print("applied")
-   return params, opt_state, loss_value
+ @jax.jit
+ def step(params, opt_state, batch, labels):
+  loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
+  # print("got grads")
+  updates, opt_state = optimizer.update(grads, opt_state, params)
+  # print("updated")
+  params = optax.apply_updates(params, updates)
+  # print("applied")
+  return params, opt_state, loss_value
 
-  for i in range(epochs):
-   for x_batch, y_batch in batches(x, y):
-    params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+ for i in range(epochs):
+  training_losses = list()
+  for x_batch, y_batch in batches(x_train, y_train):
+   params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+   training_losses.append(loss_value)
 
-   print(f'step {i}, loss: {loss_value}')
+  training_loss = jnp.mean(jnp.array(training_losses))
 
-  return params
+  val_losses = list()
+  val_preds = list()
+  val_labels = list()
+  for x_batch, y_batch in batches(x_val, y_val):
+   loss_value = loss(params, x_batch, y_batch)
+   val_losses.append(loss_value)
+
+   preds = model(params, x_batch).round()
+   val_preds.append(preds)
+   val_labels.append(y_batch)
+
+  val_preds_all = jnp.concatenate(val_preds)
+  val_labels_all = jnp.concatenate(val_labels)
+  
+  val_loss = jnp.mean(jnp.array(val_losses))
+  val_acc = accuracy(val_preds_all, val_labels_all)
+
+  print(f'step {i}, training_loss: {training_loss} val_loss: {val_loss} val_acc: {val_acc}')
+
+ return params
 
 if __name__ == "__main__":
  data = load(True)
@@ -305,7 +334,7 @@ if __name__ == "__main__":
 
  start = time.time()
 
- params = fit(params, optimizer, x_train, y_train, ITERATIONS)
+ params = fit(params, optimizer, x_train, y_train, x_val, y_val, ITERATIONS)
 
  dur = time.time() - start
 
