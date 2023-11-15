@@ -42,7 +42,7 @@ def batches(*arrays) -> Generator[jnp.ndarray, None, None]:
  size = len(arrays[0])
  for arr in arrays[1:]:
   if len(arr) != size:
-   raise Error(f"Size of input {len(arr)} != {size}")
+   raise Exception(f"Size of input {len(arr)} != {size}")
 
  for start in range(0, size, BATCH_SIZE):
   end = start + BATCH_SIZE
