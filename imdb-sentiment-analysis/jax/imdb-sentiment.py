@@ -31,8 +31,9 @@ import optax
 ITERATIONS = 100
 BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
+MODEL_DIMS = EMBEDDING_DIMS
 ATTN_QUERIES = 8
-ATTN_DIMS = 20
+ATTN_DIMS = 80
 ATTN_HEADS = 5
 ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
 ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
@@ -91,6 +92,7 @@ class AttentionParams:
 
   return cls(w_query, w_keys, w_values)
 
+
 @dataclass
 class MultiheadAttentionParams:
  heads: list[AttentionParams]
@@ -100,8 +102,8 @@ class MultiheadAttentionParams:
  def initialize(cls, rng_key, init: jnn.initializers.Initializer, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
   rng_keys = jrand.split(rng_key, n_heads + 1)
 
-  heads = [ AttentionParams.initialize(rng_keys[i], init, d_model, d_k_out, d_v_out) for i in range(n_heads) ]
-  w = init(rng_keys[-1], (n_heads * d_k_out, d_model), dtype=fX)
+  heads = [ AttentionParams.initialize(rng_keys[i], init, EMBEDDING_DIMS, MODEL_DIMS, ATTN_DIMS_PER_HEAD) for i in range(n_heads) ]
+  w = init(rng_keys[-1], (ATTN_DIMS, MODEL_DIMS), dtype=fX)
 
   return cls(heads, w)
 
@@ -163,10 +165,10 @@ class Params:
  def initialize(cls, key, vocab_len):
   emb_key, attn_key, attn_query_key, linear1_key, linear2_key = jrand.split(key, 5)
   emb =  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX)
-  attn =  MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, EMBEDDING_DIMS, EMBEDDING_DIMS)
+  attn =  MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, ATTN_DIMS_PER_HEAD, EMBEDDING_DIMS)
   attn_query = initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX)
-  linear1 =  Linear.initialize(linear1_key, ATTN_DIMS, ATTN_DIMS // 2, fX)
-  linear2 =  Linear.initialize(linear2_key, ATTN_DIMS // 2, 1, fX)
+  linear1 =  Linear.initialize(linear1_key, MODEL_DIMS, MODEL_DIMS // 2, fX)
+  linear2 =  Linear.initialize(linear2_key, MODEL_DIMS // 2, 1, fX)
 
   return cls(emb, attn, attn_query, linear1, linear2)
 
@@ -198,6 +200,8 @@ def multihead_attention(params: MultiheadAttentionParams, q: jnp.ndarray, k: jnp
  # print(f"attns_shapes: {attns_shapes}")
 
  out = jnp.concatenate(attns, axis=-1)
+
+ # print(f'mha post-concat shape: {out.shape}')
 
  return out @ params.w
 
