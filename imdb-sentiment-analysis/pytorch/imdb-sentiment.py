@@ -47,7 +47,7 @@ class ImdbSentiment(LightningModule):
   ]
 
  def params(self):
-  return itertools.chain(self.embedding.parameters(), self.linear1.parameters(), self.linear2.parameters())
+  return itertools.chain(self.embedding.parameters(), self.attn.parameters(), self.attn_query, self.linear1.parameters(), self.linear2.parameters())
 
  def forward(self, x, y):
   emb = self.embedding(x)
@@ -137,6 +137,7 @@ if __name__=="__main__":
  val = tensorize(data['val'])
  test = tensorize(data['test'])
  vocab_len = data['vocab_len']
+ target_len = data['target_len']
 
  batch_size = 100
 
@@ -148,7 +149,7 @@ if __name__=="__main__":
  val_loader = DataLoader(val, **dl_kwargs)
  test_loader = DataLoader(test, **dl_kwargs)
 
- model = ImdbSentiment(batch_size, vocab_len, data['target_len'])
+ model = ImdbSentiment(batch_size, vocab_len, target_len)
 
  trainer = Trainer(max_epochs=50)
  trainer.fit(model, train_loader, val_loader)

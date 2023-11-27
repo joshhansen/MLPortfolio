@@ -1,8 +1,9 @@
 from imdb_sa_common import load
 
-from typing import Mapping
+from typing import Generator, Iterable, Mapping, Tuple
 
 from collections import Counter
+from dataclasses import dataclass
 import itertools
 import json
 import os
@@ -12,9 +13,10 @@ import time
 
 from jax import config
 config.update("jax_debug_nans", True)
+config.update("jax_numpy_rank_promotion", "raise")
 
 import jax
-# from jax import debug as jdbg
+from jax import debug as jdbg
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrand
@@ -26,10 +28,184 @@ from more_itertools import unzip
 
 import optax
 
+ITERATIONS = 100
+BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
+MODEL_DIMS = EMBEDDING_DIMS
+ATTN_QUERIES = 8
+ATTN_DIMS = 80
+ATTN_HEADS = 5
+ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
+ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
 
+def batches(*arrays) -> Generator[jnp.ndarray, None, None]:
+ size = len(arrays[0])
+ for arr in arrays[1:]:
+  if len(arr) != size:
+   raise Exception(f"Size of input {len(arr)} != {size}")
+
+ for start in range(0, size, BATCH_SIZE):
+  end = start + BATCH_SIZE
+
+  batches = [arr[start:end] for arr in arrays]
+
+  for batch in batches:
+   if len(batch) != BATCH_SIZE:
+    # We're at the end of the data where batches are incomplete; get outta here
+    return
+
+  yield batches
+
+
+def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ n_q = q.shape[-2]
+ d_k = q.shape[-1]
+
+ n_k = k.shape[-2]
+ # checkify.check(d_k == k.shape[-1], "q and k d_k mismatch")
+
+ # checkify.check(n_k == v.shape[-2], "k and v n_k mismatch")
+ d_v = v.shape[-1]
+ 
+ out = q @ k.transpose()
+
+ out = out / jnp.sqrt(d_k)
+
+ out = jnn.softmax(out)
+
+ return out @ v
+
+@dataclass
+class AttentionParams:
+ w_query: jnp.ndarray
+ w_keys: jnp.ndarray
+ w_values: jnp.ndarray
+
+ @classmethod
+ def initialize(cls, rng_key, init: jnn.initializers.Initializer, d_model: int, d_k_out: int, d_v_out: int):
+  rng_key_q, rng_key_k, rng_key_v = jrand.split(rng_key, 3)
+  w_query = init(rng_key_q, (d_model, d_k_out), dtype=fX)
+  w_keys = init(rng_key_k, (d_model, d_k_out), dtype=fX)
+  w_values = init(rng_key_v, (d_model, d_v_out), dtype=fX)
+
+  return cls(w_query, w_keys, w_values)
+
+
+@dataclass
+class MultiheadAttentionParams:
+ heads: list[AttentionParams]
+ w: jnp.ndarray
+
+ @classmethod
+ def initialize(cls, rng_key, init: jnn.initializers.Initializer, n_heads: int, d_model: int, d_k_out: int, d_v_out: int):
+  rng_keys = jrand.split(rng_key, n_heads + 1)
+
+  heads = [ AttentionParams.initialize(rng_keys[i], init, EMBEDDING_DIMS, MODEL_DIMS, ATTN_DIMS_PER_HEAD) for i in range(n_heads) ]
+  w = init(rng_keys[-1], (ATTN_DIMS, MODEL_DIMS), dtype=fX)
+
+  return cls(heads, w)
+
+def flatten_AttentionParams(params: AttentionParams) -> Tuple[list[jnp.ndarray], None]:
+ return ([params.w_query, params.w_keys, params.w_values], None)
+
+def unflatten_AttentionParams(aux_data: str, flat_contents: list[jnp.ndarray]) -> AttentionParams:
+ return AttentionParams(*flat_contents)
+
+jax.tree_util.register_pytree_node(AttentionParams, flatten_AttentionParams, unflatten_AttentionParams)
+
+def flatten_MultiheadAttentionParams(params: MultiheadAttentionParams) -> Tuple[list[jnp.ndarray], None]:
+ heads = jnp.array(len(params.heads))
+
+ flat_contents = [params.w, *params.heads]
+
+ return (flat_contents, None)
+
+def unflatten_MultiheadAttentionParams(aux_data: str, flat_contents: list[jnp.ndarray]) -> MultiheadAttentionParams:
+ w = flat_contents[0]
+ heads = flat_contents[1:]
+
+ return MultiheadAttentionParams(heads, w)
+ 
+jax.tree_util.register_pytree_node(MultiheadAttentionParams, flatten_MultiheadAttentionParams, unflatten_MultiheadAttentionParams)
+
+@dataclass
+class Linear:
+ w: jnp.ndarray
+ b: jnp.ndarray
+
+ @classmethod
+ def initialize(cls, key, in_dims: int, out_dims: int, dtype):
+  w_key, b_key = jrand.split(key, 2)
+  w = initializer(w_key, (in_dims, out_dims), dtype=dtype)
+  b = jrand.normal(b_key, (out_dims,), dtype=dtype)
+  return cls(w, b)
+
+ def __call__(self, x: jnp.ndarray):
+  return x @ self.w + self.b
+
+def flatten_Linear(params: Linear) -> Tuple[list[jnp.ndarray], None]:
+ return ([params.w, params.b], None)
+
+def unflatten_Linear(aux_data: str, flat_contents: list[jnp.ndarray]) -> Linear:
+ return Linear(*flat_contents)
+
+jax.tree_util.register_pytree_node(Linear, flatten_Linear, unflatten_Linear)
+
+@dataclass
+class Params:
+ emb: jnp.ndarray
+ attn: MultiheadAttentionParams
+ attn_query: jnp.ndarray
+ linear1: Linear
+ linear2: Linear
+
+ @classmethod
+ def initialize(cls, key, vocab_len):
+  emb_key, attn_key, attn_query_key, linear1_key, linear2_key = jrand.split(key, 5)
+  emb =  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX)
+  attn =  MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, ATTN_DIMS_PER_HEAD, EMBEDDING_DIMS)
+  attn_query = initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX)
+  linear1 =  Linear.initialize(linear1_key, MODEL_DIMS, MODEL_DIMS // 2, fX)
+  linear2 =  Linear.initialize(linear2_key, MODEL_DIMS // 2, 1, fX)
+
+  return cls(emb, attn, attn_query, linear1, linear2)
+
+
+def flatten_Params(params: Params) -> Tuple[list[jnp.ndarray], None]:
+ return ([params.emb, params.attn, params.attn_query, params.linear1, params.linear2], None)
+
+def unflatten_Params(aux_data: str, flat_contents: list[jnp.ndarray]) -> Params:
+ return Params(*flat_contents)
+
+jax.tree_util.register_pytree_node(Params, flatten_Params, unflatten_Params)
+
+def multihead_attention(params: MultiheadAttentionParams, q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray) -> jnp.ndarray:
+ attns = list()
+
+ # print(f"q shape: {q.shape}")
+ # print(f"k shape: {k.shape}")
+ # print(f"v shape: {v.shape}")
+
+ for head in params.heads:
+  q_head = q @ head.w_query
+  k_head = k @ head.w_keys
+  v_head = v @ head.w_values
+
+  attns.append(scaled_dot_product_attention(q_head, k_head, v_head))
+
+ attns_shapes = [ attn.shape for attn in attns ]
+
+ # print(f"attns_shapes: {attns_shapes}")
+
+ out = jnp.concatenate(attns, axis=-1)
+
+ # print(f'mha post-concat shape: {out.shape}')
+
+ return out @ params.w
+
+batch_multihead_attention = jax.vmap(multihead_attention, [None, None, 0, 0])
 
 def accuracy(preds, y):
  matching = y == preds
@@ -38,28 +214,38 @@ def accuracy(preds, y):
 
  return correct / x_test.shape[0]
 
-def model(params, x):
- emb, *dense = params
-
- # out = emb[x].mean(axis=1)
- out = emb[x].sum(axis=1)
-
- # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[1]['w'].dtype} b.dtype {params[1]['b'].dtype}")
-
- # out = out @ params[1]['w'] + params[1]['b']
-
- # # jdbg.print(f"out.dtype {out.dtype} w.dtype {params[2]['w'].dtype} b.dtype {params[2]['b'].dtype}")
+def model(params: Params, x: jnp.ndarray):
+ # print(f"x shape {x.shape}")
  
- # out = out @ params[2]['w'] + params[2]['b']
+ # out = emb[x].mean(axis=1)
+ out = params.emb[x]
 
- for i, d in enumerate(dense):
-  out = out @ d['w'] + d['b']
-  # if i < len(dense) - 1:
-  #  out = jnn.elu(out)
-  # else:
-  #  out = jnn.sigmoid(out)
+ # print(f"embedded shape {out.shape}")
 
- return jnn.sigmoid(out.mean(axis=1))
+ out = batch_multihead_attention(params.attn, params.attn_query, out, out)
+
+ # print(f"post-attn shape: {out.shape}")
+
+ out = jnp.mean(out, axis=-2)
+
+ # print(f"post-attn-mean-shape: {out.shape}")
+
+ with jax.numpy_rank_promotion("warn"):
+  out = params.linear1(out)
+
+  # print(f"post-linear1 shape: {out.shape}")
+
+  out = params.linear2(out)
+
+  # print(f"post-linear2 shape: {out.shape}")
+
+ out = out.mean(axis=-1)
+
+ # print(f"post-dense-mean shape: {out.shape}")
+
+ # print(f"post-mean shape: {out.shape}")
+
+ return jnn.sigmoid(out)
  # return out.sum(axis=1)
  # return out.mean(axis=1)
 
@@ -89,10 +275,8 @@ def mean_squared_error(preds, y):
  delta = preds - y
  return jnp.mean(delta**2, dtype=fX)
 
-
-
 @jax.jit
-def loss_core(params, x, y):
+def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  preds = model(params, x)
  # jdbg.breakpoint()
  # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
@@ -104,46 +288,55 @@ def loss_core(params, x, y):
  # return binary_cross_entropy(preds, y)
  return mean_squared_error(preds, y)
 
+def fit(
+ params,
+ optimizer: optax.GradientTransformation,
+ x_train: jnp.ndarray,
+ y_train: jnp.ndarray,
+ x_val: jnp.ndarray,
+ y_val: jnp.ndarray,
+ epochs: int
+) -> optax.Params:
+ opt_state = optimizer.init(params)
 
-# loss = checkify.checkify(loss_core, errors)
+ @jax.jit
+ def step(params, opt_state, batch, labels):
+  loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
+  # print("got grads")
+  updates, opt_state = optimizer.update(grads, opt_state, params)
+  # print("updated")
+  params = optax.apply_updates(params, updates)
+  # print("applied")
+  return params, opt_state, loss_value
 
-# dloss_core = jax.grad(loss_core)
-# dloss = checkify.checkify(dloss_core, errors)
+ for i in range(epochs):
+  training_losses = list()
+  for x_batch, y_batch in batches(x_train, y_train):
+   params, opt_state, loss_value = step(params, opt_state, x_batch, y_batch)
+   training_losses.append(loss_value)
 
-loss = loss_core
-dloss = jax.grad(loss_core)
+  training_loss = jnp.mean(jnp.array(training_losses))
 
-@jax.jit
-def update(params, x, y, lr=1e-2):
- # pred = model(params, x)
+  val_losses = list()
+  val_preds = list()
+  val_labels = list()
+  for x_batch, y_batch in batches(x_val, y_val):
+   loss_value = loss(params, x_batch, y_batch)
+   val_losses.append(loss_value)
 
- grad = dloss(params, x, y)
+   preds = model(params, x_batch).round()
+   val_preds.append(preds)
+   val_labels.append(y_batch)
 
- return jax.tree_map(
-     lambda p, g: p - lr * g, params, grad
- )
+  val_preds_all = jnp.concatenate(val_preds)
+  val_labels_all = jnp.concatenate(val_labels)
+  
+  val_loss = jnp.mean(jnp.array(val_losses))
+  val_acc = accuracy(val_preds_all, val_labels_all)
 
-def fit(params: optax.Params, optimizer: optax.GradientTransformation, x, y, epochs) -> optax.Params:
-  opt_state = optimizer.init(params)
+  print(f'step {i}, training_loss: {training_loss} val_loss: {val_loss} val_acc: {val_acc}')
 
-  @jax.jit
-  def step(params, opt_state, batch, labels):
-    loss_value, grads = jax.value_and_grad(loss)(params, batch, labels)
-    updates, opt_state = optimizer.update(grads, opt_state, params)
-    params = optax.apply_updates(params, updates)
-    return params, opt_state, loss_value
-
-  x_shape_batched = (1, *x.shape)
-  y_shape_batched = (1, *y.shape)
-
-  for i in range(epochs):
-   for j, (batch, labels) in enumerate(zip(x.reshape(x_shape_batched), y.reshape(y_shape_batched))):
-    params, opt_state, loss_value = step(params, opt_state, batch, labels)
-   # if i % 100 == 0:
-   print(f'step {i}, loss: {loss_value}')
-
-  return params
-
+ return params
 
 if __name__ == "__main__":
  data = load(True)
@@ -155,6 +348,7 @@ if __name__ == "__main__":
  x_test = jnp.array(data['x_test'], dtype=iX)
  y_test = jnp.array(data['y_test'], dtype=fX)
  vocab_len = data['vocab_len']
+ target_len = data['target_len']
 
  del data
 
@@ -172,37 +366,36 @@ if __name__ == "__main__":
 
 
  rng_key = jrand.PRNGKey(85439357)
- emb_key, dense0_w_key, dense0_b_key, dense1_w_key, dense1_b_key = jrand.split(rng_key, 5)
+ emb_key, attn_key, attn_query_key, dense0_key, dense1_key = jrand.split(rng_key, 5)
 
  initializer = jnn.initializers.glorot_uniform()
 
- params = [
-  # jrand.normal(emb_key, (vocab_len, EMBEDDING_DIMS,), dtype=fX),
-  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX),
-  {
-   # 'w': jrand.normal(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
-   # 'w': initijnn.initializers.glorot_uniform(EMBEDDING_DIMS, EMBEDDING_DIMS // 2, dtype=fX),
-   'w': initializer(dense0_w_key, (EMBEDDING_DIMS, EMBEDDING_DIMS // 2), dtype=fX),
-   'b': jrand.normal(dense0_b_key, (EMBEDDING_DIMS // 2,), dtype=fX)
-  },
-  {
-   # 'w': jrand.normal(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
-   # 'w': jnn.initializers.glorot_uniform(EMBEDDING_DIMS // 2, 1, dtype=fX),
-   'w': initializer(dense1_w_key, (EMBEDDING_DIMS // 2, 1), dtype=fX),
-   'b': jrand.normal(dense1_b_key, (1,), dtype=fX)
-  }
- ]
+ params = Params.initialize(rng_key, vocab_len)
 
- train_loss = loss(params, x_train, y_train)
- val_loss = loss(params, x_val, y_val)
- val_preds = model(params, x_val).round()
- val_acc = accuracy(val_preds, y_val)
- print(f"-1 train_loss: {train_loss} val_loss: {val_loss} val_acc: {val_acc}")
+ total_size = 0
+ for layer_name, layer in params.__dict__.items():
+  sizes = jtree.tree_map(lambda x: x.size, layer)
+  size = jtree.tree_reduce(lambda x,y: x+y, sizes)
+  print(f"{layer_name}: {size}")
+
+  total_size += size
+
+ print(f"total_size: {total_size}")
+
+ shapes = jtree.tree_map(lambda x: x.shape, params)
+
+ print(f"shapes: {shapes}")
+
+ del initializer
+ del sizes
+ del total_size
+ del shapes
 
  optimizer = optax.adam(learning_rate=1e-3)
 
  start = time.time()
- params = fit(params, optimizer, x_train, y_train, 50)
+
+ params = fit(params, optimizer, x_train, y_train, x_val, y_val, ITERATIONS)
 
  dur = time.time() - start
 
@@ -211,9 +404,17 @@ if __name__ == "__main__":
 
  print(f"y_test shape: {y_test.shape}")
 
- preds = model(params, x_test).round()
+ preds = list()
+ ys = list()
 
- acc = accuracy(preds, y_test)
+ for x,y in batches(x_test, y_test):
+  preds.append(model(params, x).round())
+  ys.append(y)
+
+ relevant_preds = jnp.concatenate(preds)
+ relevant_ys = jnp.concatenate(ys)
+
+ acc = accuracy(relevant_preds, relevant_ys)
 
  print(f"accuracy: {acc}")
 

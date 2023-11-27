@@ -1,4 +1,0 @@
-ipython==8.16.1
-more-itertools==10.1.0
-numpy==1.26.1
-optax==0.1.7
