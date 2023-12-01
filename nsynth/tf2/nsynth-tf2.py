@@ -3,18 +3,22 @@ import os
 import tensorflow as tf
 
 
-BATCH_SIZE=100
-SHUFFLE_SIZE=10000
+BATCH_SIZE=10
+SHUFFLE_SIZE=100
 
 def parse_example(raw):
  return tf.io.parse_example(raw, {
-  'audio': tf.io.RaggedFeature(dtype=tf.float32),
-  'pitch': tf.io.FixedLenFeature((), tf.int64),
-  'sample_rate': tf.io.FixedLenFeature((), tf.int64),
+  # 'input_1': tf.io.RaggedFeature(dtype=tf.float32),
+  # 'input_1': {
+   # 'audio': tf.io.RaggedFeature(dtype=tf.float32),
+  'audio': tf.io.FixedLenFeature((64000,), tf.float32)
+  #  'pitch': tf.io.FixedLenFeature((), tf.int64),
+  #  'sample_rate': tf.io.FixedLenFeature((), tf.int64),
+  #  }
  })
 
 def dataset(ds):
- return ds.map(parse_example).shuffle(SHUFFLE_SIZE).batch(BATCH_SIZE).take(10)
+ return ds.map(lambda x: (x['audio'], x['audio'])).shuffle(SHUFFLE_SIZE).batch(BATCH_SIZE).take(1)
 
 if __name__ == "__main__":
  data_dir = os.path.join(os.environ['HOME'], 'Data/org/tensorflow/magenta')
@@ -24,16 +28,20 @@ if __name__ == "__main__":
 
  print(f"train_path: {train_path}")
 
- train = dataset(tf.data.TFRecordDataset(train_path))
- val = dataset(tf.data.TFRecordDataset(val_path))
- test = dataset(tf.data.TFRecordDataset(test_path))
+ train_raw = tf.data.TFRecordDataset(train_path).map(parse_example)
+ val_raw = tf.data.TFRecordDataset(val_path).map(parse_example)
+ test_raw = tf.data.TFRecordDataset(test_path).map(parse_example)
 
- def parse_example(raw):
-  return tf.io.parse_example(raw, {
-   'audio': tf.io.RaggedFeature(dtype=tf.float32),
-   'pitch': tf.io.FixedLenFeature((), tf.int64),
-   'sample_rate': tf.io.FixedLenFeature((), tf.int64),
-  })
+ train = dataset(train_raw)
+ val = dataset(val_raw)
+ test = dataset(test_raw)
+
+ # def parse_example(raw):
+ #  return tf.io.parse_example(raw, {
+ #   'audio': tf.io.RaggedFeature(dtype=tf.float32),
+ #   'pitch': tf.io.FixedLenFeature((), tf.int64),
+ #   'sample_rate': tf.io.FixedLenFeature((), tf.int64),
+ #  })
 
  x = tf.keras.Input((64000,1,), BATCH_SIZE)
  y = x
@@ -51,6 +59,7 @@ if __name__ == "__main__":
    )(y)
 
  model = tf.keras.Model(x, y)
+ print(model.summary())
 
  #TODO mu-law
 
@@ -66,11 +75,10 @@ if __name__ == "__main__":
  #  print(batch['audio'].shape)
  #  print(batch['pitch'])
  #  print(batch['sample_rate'])
-
   
  history = model.fit(
-    { 'input_1': train },
+    train,
     batch_size=BATCH_SIZE,
-    epochs=2,
+    epochs=50,
     # validation_data=(val, val),
  )
