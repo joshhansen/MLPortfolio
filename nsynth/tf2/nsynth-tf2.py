@@ -39,12 +39,20 @@ if __name__ == "__main__":
  x = tf.keras.Input((64000,1,), BATCH_SIZE)
  y = x
 
- for block in range(3):
-  for layer in range(8):
+ BLOCKS=3
+ LAYERS=8
+
+ for block in range(BLOCKS):
+  for layer in range(LAYERS):
    dilation = 2**layer
 
+   if block < BLOCKS-1:
+    filters = 32
+   else:
+    filters = 2**(LAYERS - layer - 1)
+
    y = tf.keras.layers.Conv1D(
-    32,
+    filters,
     2,
     dilation_rate=dilation,
     padding='causal',
