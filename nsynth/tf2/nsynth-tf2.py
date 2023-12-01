@@ -18,7 +18,7 @@ def parse_example(raw):
  })
 
 def dataset(ds):
- return ds.map(lambda x: (x['audio'], x['audio'])).shuffle(SHUFFLE_SIZE).batch(BATCH_SIZE).take(1)
+ return ds.map(lambda x: (x['audio'], x['audio'])).shuffle(SHUFFLE_SIZE).batch(BATCH_SIZE)
 
 if __name__ == "__main__":
  data_dir = os.path.join(os.environ['HOME'], 'Data/org/tensorflow/magenta')
@@ -71,8 +71,8 @@ if __name__ == "__main__":
  )
  
  history = model.fit(
-    train,
-    batch_size=BATCH_SIZE,
-    epochs=50,
-    # validation_data=(val, val),
+  train,
+  batch_size=BATCH_SIZE,
+  epochs=50,
+  validation_data = val,
  )
