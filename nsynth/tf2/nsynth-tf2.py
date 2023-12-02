@@ -4,15 +4,17 @@ import tensorflow as tf
 
 
 BATCH_SIZE=10
-SHUFFLE_SIZE=100
+SHUFFLE_SIZE=5000
+AUDIO_LEN=64000
 
 def parse_example(raw):
  return tf.io.parse_example(raw, {
   # 'input_1': tf.io.RaggedFeature(dtype=tf.float32),
   # 'input_1': {
    # 'audio': tf.io.RaggedFeature(dtype=tf.float32),
-  'audio': tf.io.FixedLenFeature((64000,), tf.float32)
-  #  'pitch': tf.io.FixedLenFeature((), tf.int64),
+  'audio': tf.io.FixedLenFeature((AUDIO_LEN,), tf.float32),
+  'instrument': tf.io.FixedLenFeature((), tf.int64),
+  'pitch': tf.io.FixedLenFeature((), tf.int64),
   #  'sample_rate': tf.io.FixedLenFeature((), tf.int64),
   #  }
  })
@@ -75,4 +77,6 @@ if __name__ == "__main__":
   batch_size=BATCH_SIZE,
   epochs=50,
   validation_data = val,
+  validation_steps = 5000,
+  validation_freq = 2
  )
