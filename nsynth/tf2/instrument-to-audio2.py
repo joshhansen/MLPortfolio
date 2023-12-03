@@ -4,7 +4,7 @@ import os
 import tensorflow as tf
 
 
-BATCH_SIZE=10
+BATCH_SIZE=20
 SHUFFLE_SIZE=5000
 AUDIO_LEN=64000
 INSTR_FAM_EMBED_DIM=30
@@ -31,8 +31,12 @@ if __name__ == "__main__":
 
   return ex, audio
 
+ def subsample(i,x):
+  return i % 20 == 0
+
  def dataset(ds):
-  return ds.shuffle(SHUFFLE_SIZE).batch(BATCH_SIZE)
+  return ds.shuffle(SHUFFLE_SIZE).repeat().enumerate().filter(subsample).map(lambda i,x: x).batch(BATCH_SIZE)
+
  data_dir = os.path.join(os.environ['HOME'], 'Data/org/tensorflow/magenta')
  train_path = os.path.join(data_dir, 'nsynth-train.tfrecord')
  val_path = os.path.join(data_dir, 'nsynth-valid.tfrecord')
@@ -93,8 +97,17 @@ if __name__ == "__main__":
 
  #TODO mu-law
 
+ output_dir = '/tmp/keras/checkpoint.model.tf'
+
+ callbacks = [
+  tf.keras.callbacks.ModelCheckpoint(
+     filepath=output_dir,
+     save_best_only=True
+  )
+ ]
+
  model.compile(
-  optimizer=tf.keras.optimizers.RMSprop(),  # Optimizer
+  optimizer=tf.keras.optimizers.Adam(),
   loss = tf.keras.losses.MeanSquaredError(),
   metrics = [tf.keras.metrics.MeanAbsolutePercentageError()]
  )
@@ -103,7 +116,9 @@ if __name__ == "__main__":
   train,
   batch_size=BATCH_SIZE,
   epochs=50,
+  steps_per_epoch=15000,
   validation_data = val,
-  validation_steps = 5000,
-  validation_freq = 2
+  validation_steps = 1500,
+  validation_freq = 1,
+  callbacks=callbacks,
  )
