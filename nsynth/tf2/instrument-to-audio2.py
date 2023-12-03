@@ -1,3 +1,4 @@
+import numpy as np
 import os
 
 import tensorflow as tf
@@ -6,7 +7,7 @@ import tensorflow as tf
 BATCH_SIZE=10
 SHUFFLE_SIZE=5000
 AUDIO_LEN=64000
-INSTR_FAM_EMBED_DIM=31
+INSTR_FAM_EMBED_DIM=30
 
 
 if __name__ == "__main__":
@@ -26,7 +27,7 @@ if __name__ == "__main__":
   ex['instrument_family'] = instrument_family_embedding(ex['instrument_family'])
 
   audio = ex['audio']
-  del ex['audio']
+  # del ex['audio']
 
   return ex, audio
 
@@ -49,9 +50,23 @@ if __name__ == "__main__":
 
  instrument = tf.keras.Input((INSTR_FAM_EMBED_DIM,), BATCH_SIZE, name="instrument_family")
  pitch = tf.keras.Input((1,), BATCH_SIZE, name="pitch")
- inputs = tf.keras.layers.Concatenate(axis=1)([instrument, pitch])
- repeated_inputs = tf.keras.layers.RepeatVector(AUDIO_LEN)(inputs)
- y = repeated_inputs
+ meta = tf.keras.layers.Concatenate(axis=1)([instrument, pitch])
+ repeated_meta = tf.keras.layers.RepeatVector(AUDIO_LEN, name='repeated_meta')(meta)
+ print(f"repeated meta shape: {repeated_meta.shape}")
+ audio = tf.keras.Input((AUDIO_LEN, 1,), BATCH_SIZE, name="audio")
+ print(f"audio shape: {audio.shape}")
+
+ zero = tf.keras.backend.constant(np.zeros((BATCH_SIZE, 1, 1)))
+ # audio_without_first = tf.keras.layers.Lambda(lambda x: x[:-1].concat(zero))
+ # audio_without_first = audio[:-1].concat(zero)
+
+ # Shift audio so convolutions don't have access to current audio output, only previous
+ audio_without_first = tf.keras.layers.Concatenate(axis=1)([zero, audio[:, 1:]])
+
+ audio_with_meta = tf.keras.layers.Concatenate(axis=2)([audio_without_first, repeated_meta])
+ print(f"audio_with_meta shape: {audio_with_meta.shape}")
+
+ y = audio_with_meta
 
  BLOCKS=3
  LAYERS=8
@@ -73,7 +88,7 @@ if __name__ == "__main__":
     name=f"block{block}layer{layer}dilation{dilation}"
    )(y)
 
- model = tf.keras.Model([instrument, pitch], y)
+ model = tf.keras.Model([audio, instrument, pitch], y)
  print(model.summary())
 
  #TODO mu-law
