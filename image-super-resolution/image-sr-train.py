@@ -1,3 +1,5 @@
+import os
+
 from absl import logging
 import flax.linen as nn
 from flax import nnx
@@ -137,60 +139,58 @@ def train_step(
 
 
 if __name__ == "__main__":
-    full_np = imageio.v3.imread('/home/josh/Data/image.jpg')
-    small_np = imageio.v3.imread('/home/josh/Data/image-small.jpg')
-
-    full: jax.Array = jnp.asarray(
-        full_np, dtype='float32').reshape(1, *full_np.shape)
-    small: jax.Array = jnp.asarray(
-        small_np, dtype='float32').reshape(1, *small_np.shape)
-
-    print(f"Full shape: {full.shape}")
-    print(f"Small shape: {small.shape}")
-
-    # params = Params.initialize()
-
-    # dmodel = model_grad(params, full, small)
-
-    # print(dmodel)
+    HOME = os.environ['HOME']
+    DATA_DIR = os.path.join(
+        os.environ['HOME'], "Data/com/github/cvdfoundation/google-landmark")
+    SMALL_DIR = os.path.join(DATA_DIR, "train_downsampled")
+    FULL_DIR = os.path.join(DATA_DIR, "train")
 
     LR = 0.001
     MOMENTUM = 0.1
-    ITS = 10
+    ITS = 100
 
     rngs = nnx.Rngs(98239)
 
     m = Model(rngs=rngs)
     opt = nnx.Optimizer(m, optax.adam(1e-3))
-    # key = jax.random.key(0)
-    # params = m.init(key, jnp.zeros((1024, 1024, 3)))
-    # tx = optax.sgd(LR, MOMENTUM)
-    # state = TrainState.create(
-    # apply_fn=m.apply, params=params, tx=tx)
-
-    # workdir = "/tmp/image-sr"
-    # summary_writer = SummaryWriter(workdir)
-    # summary_writer.hparams(dict(config))
 
     for epoch in range(ITS):
-        train_loss = train_step(m, opt, small, full)
-        test_loss = -1
-        # key, input_key = jax.random.split(key)
-        # state, train_loss = train_epoch(
-        #     state, small, full, key
-        # )
-        # _, test_loss = apply_model(
-        #     state, small, full
-        # )
+        count = 0
+        total_train_loss = 0.0
+        for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
+            reldirpath = os.path.relpath(dirpath, SMALL_DIR)
+            fulldirpath = os.path.join(FULL_DIR, reldirpath)
+            print(f"dirpath: {dirpath}")
+            print(reldirpath)
+            print(fulldirpath)
 
-        print(
-            'epoch:% 3d, train_loss: %.4f, test_loss: %.4f,'
-            % (
-                epoch,
-                train_loss,
-                test_loss,
-            )
-        )
+            for filename in filenames:
+                small_path = os.path.join(dirpath, filename)
+                full_path = os.path.join(fulldirpath, filename)
 
-        # summary_writer.scalar('train_loss', train_loss, epoch)
-        # summary_writer.scalar('test_loss', test_loss, epoch)
+                small_np = imageio.v3.imread(small_path)
+                full_np = imageio.v3.imread(full_path)
+
+                small: jax.Array = jnp.asarray(
+                    small_np, dtype='float32').reshape(1, *small_np.shape)
+                full: jax.Array = jnp.asarray(
+                    full_np, dtype='float32').reshape(1, *full_np.shape)
+
+                print(f"Small shape: {small.shape}")
+                print(f"Full shape: {full.shape}")
+
+                count += 1
+                total_train_loss += train_step(m, opt, small, full)
+                test_loss = -1
+
+                if count % 10 == 0:
+
+                    epoch_avg_train_loss = total_train_loss / count
+                    print(
+                        'epoch:% 3d, epoch avg train loss: %.4f, test_loss: %.4f,'
+                        % (
+                            epoch,
+                            epoch_avg_train_loss,
+                            test_loss,
+                        )
+                    )
