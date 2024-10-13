@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import sys
 
 import flax
@@ -9,6 +10,7 @@ import imageio
 import jax
 import jax.numpy as jnp
 import optax
+import orbax.checkpoint as ocp
 
 
 class Model(nnx.Module):
@@ -96,6 +98,19 @@ def is_valid(filename: str) -> bool:
     return basename.endswith('1')
 
 
+def erase_and_create_empty(path: str) -> Path:
+    p = Path(path)
+
+    if p.is_dir():
+        shutil.rmtree(p)
+    else:
+        p.unlink(missing_ok=True)
+
+    p.mkdir(parents=True)
+
+    return p
+
+
 if __name__ == "__main__":
     HOME = os.environ['HOME']
     DATA_DIR = os.path.join(
@@ -114,10 +129,19 @@ if __name__ == "__main__":
 
     m = Model(rngs=rngs)
     opt = nnx.Optimizer(m, optax.adam(1e-3))
+    checkpoint_mgr = ocp.CheckpointManager(
+        erase_and_create_empty('/tmp/image-sr'),
+        ocp.StandardCheckpointer(),
+        options=ocp.CheckpointManagerOptions(
+            max_to_keep=3, save_interval_steps=2),
+        # item_names=('state',),
+        # item_names=('state', 'extra_params')
+    )
 
     for epoch in range(ITS):
         train_count = 0
         test_count = 0
+        img_load_errors = 0
         total_train_loss = 0.0
         total_test_loss = 0.0
         for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
@@ -133,8 +157,19 @@ if __name__ == "__main__":
 
                 print(small_path)
 
-                small_np = imageio.v3.imread(small_path, mode="RGB")
-                full_np = imageio.v3.imread(full_path, mode="RGB")
+                try:
+                    small_np = imageio.v3.imread(small_path, mode="RGB")
+                except Exception:
+                    img_load_errors += 1
+                    sys.stderr.write(f"Couldn't load {small_path}\n")
+                    continue
+
+                try:
+                    full_np = imageio.v3.imread(full_path, mode="RGB")
+                except Exception:
+                    img_load_errors += 1
+                    sys.stderr.write(f"Couldn't load {full_path}\n")
+                    continue
 
                 small: jax.Array = jnp.asarray(
                     small_np, dtype='float32').reshape(1, *small_np.shape)
@@ -192,19 +227,27 @@ if __name__ == "__main__":
                         epoch_avg_test_loss = float('nan')
 
                     print(
-                        'epoch:% 3d, train_count: %d, epoch avg train loss: %.4f, epoch avg test_loss: %.4f,'
+                        'epoch:% 3d, train_count: %d, avg train loss: %.4f, avg test_loss: %.4f, imloaderrs: %d'
                         % (
                             epoch,
                             train_count,
                             epoch_avg_train_loss,
                             epoch_avg_test_loss,
+                            img_load_errors
                         )
                     )
 
                     sys.stdout.flush()
 
+                    # checkpoint_manager.save(epoch, args=ocp.args.Composite(
+                    #     state=ocp.args.StandardSave(m),
+                    #     # extra_params=ocp.args.JsonSave(extra_params),
+                    # ))
                     state = nnx.state(m)
-                    ser = flax.serialization.to_bytes(state)
+                    checkpoint_mgr.save(epoch, state)
 
-                    with open('./model.ser', 'wb') as w:
-                        w.write(ser)
+                    # state = nnx.state(m)
+                    # ser = flax.serialization.to_bytes(state)
+
+                    # with open('./model.ser', 'wb') as w:
+                    #     w.write(ser)
