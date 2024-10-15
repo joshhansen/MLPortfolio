@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 import shutil
@@ -66,6 +67,13 @@ def is_valid(filename: str) -> bool:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog='Image super-resolution trainer',
+        description='Trains an image sr model')
+    parser.add_argument('output_dir')
+
+    args = parser.parse_args()
+    
     HOME = os.environ['HOME']
     DATA_DIR = os.path.join(
         os.environ['HOME'], "Data/com/github/cvdfoundation/google-landmark")
@@ -84,7 +92,7 @@ if __name__ == "__main__":
     m = Model(rngs=rngs)
     opt = nnx.Optimizer(m, optax.adam(1e-3))
     with ocp.CheckpointManager(
-        erase_and_create_empty('/tmp/image-sr'),
+        erase_and_create_empty(args.output_dir),
         options=ocp.CheckpointManagerOptions(max_to_keep=3, save_interval_steps=2),
     ) as checkpoint_mgr:
         for epoch in range(ITS):
