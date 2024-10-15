@@ -130,54 +130,46 @@ if __name__ == "__main__":
     outdir = erase_and_create_empty('/tmp/image-sr-output')
 
     for i, path in enumerate(args.image_paths):
+
         try:
             small_np = imageio.v3.imread(path, mode="RGB")
         except Exception:
             sys.stderr.write(f"Couldn't load {path}\n")
             continue
 
-        small: jax.Array = jnp.asarray(
-            small_np, dtype='float32').reshape(1, *small_np.shape)
+        print(small_np.dtype)
+
+        # small: jax.Array = jnp.asarray(small_np)
+
+        # small2: jax.Array = jnp.asarray(small_np, dtype='float32')
+
+        small: jax.Array = jnp.asarray(small_np).reshape(1, *small_np.shape)
         
-        # pred = m(small)
+        pred = m(small)
 
-        pred = small
+        # pred = small
 
-        new_shape = list(pred.shape)[1:]
+        # new_shape = list(pred.shape)[1:]
 
-        pred = pred.reshape(*new_shape)
+        # pred = pred.reshape(*new_shape)
 
         # Back to Numpy
-        pred = onp.array(pred)
 
-        outpath = outdir / f"{i}.png"
+        
+        new_shape = list(pred.shape)[1:]
+        pred = pred.reshape(*new_shape).astype('uint8')
+        pred = onp.array(pred, dtype='uint8')
 
-        with open(outpath, 'wb') as w:
-            imageio.v3.imwrite(outpath, pred, mode="RGB")
+        print(pred.shape)
 
-        # for epoch in range(ITS):
-        #     train_count = 0
-        #     test_count = 0
-        #     img_load_errors = 0
-        #     total_train_loss = 0.0
-        #     total_test_loss = 0.0
-        #     for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
-        #         reldirpath = os.path.relpath(dirpath, SMALL_DIR)
-        #         fulldirpath = os.path.join(FULL_DIR, reldirpath)
+        # pred = small_np
+        # pred = onp.array(small)
+        # pred = onp.array(small2)
 
-        #         for filename in filenames:
+        orig_dest = outdir / f"{i}.orig.png"
+        imageio.v3.imwrite(orig_dest, small_np, mode="RGB")
+            
 
-        #             if train_count % 10 == 0 and train_count > 0:
+        pred_dest = outdir / f"{i}.pred.png"
+        imageio.v3.imwrite(pred_dest, pred, mode="RGB")
 
-        #                 # checkpoint_manager.save(epoch, args=ocp.args.Composite(
-        #                 #     state=ocp.args.StandardSave(m),
-        #                 #     # extra_params=ocp.args.JsonSave(extra_params),
-        #                 # ))
-        #                 state = nnx.state(m)
-        #                 checkpoint_mgr.save(epoch, state)
-
-        #                 # state = nnx.state(m)
-        #                 # ser = flax.serialization.to_bytes(state)
-
-        #                 # with open('./model.ser', 'wb') as w:
-        #                 #     w.write(ser)

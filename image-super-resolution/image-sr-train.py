@@ -120,10 +120,8 @@ if __name__ == "__main__":
                         sys.stderr.write(f"Couldn't load {full_path}\n")
                         continue
 
-                    small: jax.Array = jnp.asarray(
-                        small_np, dtype='float32').reshape(1, *small_np.shape)
-                    full: jax.Array = jnp.asarray(
-                        full_np, dtype='float32').reshape(1, *full_np.shape)
+                    small: jax.Array = jnp.asarray(small_np, dtype='float32').reshape(1, *small_np.shape)
+                    full: jax.Array = jnp.asarray(full_np, dtype='float32').reshape(1, *full_np.shape)
 
                     # print(f"Small shape: {small.shape}")
                     # print(f"Full shape: {full.shape}")
