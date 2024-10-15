@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from flax import nnx
 from flax.training.train_state import TrainState
 import jax
@@ -44,3 +46,15 @@ def apply_model(state: TrainState, X: jax.Array, Y: jax.Array):
 @jax.jit
 def update_model(state: TrainState, grads):
     return state.apply_gradients(grads=grads)
+
+def erase_and_create_empty(path: str) -> Path:
+    p = Path(path)
+
+    if p.is_dir():
+        shutil.rmtree(p)
+    else:
+        p.unlink(missing_ok=True)
+
+    p.mkdir(parents=True)
+
+    return p

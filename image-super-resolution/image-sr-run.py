@@ -10,10 +10,11 @@ from flax.training.train_state import TrainState
 import imageio
 import jax
 import jax.numpy as jnp
+import numpy as onp
 import optax
 import orbax.checkpoint as ocp
 
-from model import Model, apply_model
+from model import Model, apply_model, erase_and_create_empty
 
 
 
@@ -87,7 +88,7 @@ if __name__ == "__main__":
         description='Applies a trained super-resolution model to images')
 
     parser.add_argument("checkpoints_path", type=Path)
-    parser.add_argument("epoch", type=int)
+    # parser.add_argument("epoch", type=int)
     parser.add_argument("image_paths", type=Path, nargs='+')
 
     args = parser.parse_args()
@@ -96,45 +97,87 @@ if __name__ == "__main__":
 
     # m = Model(rngs=rngs)
     # opt = nnx.Optimizer(m, optax.adam(1e-3))
-    checkpoint_mgr = ocp.CheckpointManager(
+    with ocp.CheckpointManager(
         args.checkpoints_path.absolute(),
-        ocp.StandardCheckpointer(),
-        options=ocp.CheckpointManagerOptions(
-            max_to_keep=3, save_interval_steps=2),
-    )
+        options=ocp.CheckpointManagerOptions(max_to_keep=3, save_interval_steps=2),
+    ) as checkpoint_mgr:
 
-    state = checkpoint_mgr.restore(args.epoch)
+        epoch = checkpoint_mgr.latest_step()
+        #  restore_args = ocp.checkpoint_utils.construct_restore_args(abstract_pytree),
+        #  state = checkpoint_mgr.restore(
+        #     epoch,
+        #     items=abstract_pytree,
+        #     restore_kwargs={'restore_args': restore_args}
+        # )
 
-    abstract_model = nnx.eval_shape(lambda: Model(rngs=nnx.Rngs(382931289)))
-    gd = nnx.graphdef(abstract_model)
 
-    m = nnx.merge(gd, state)
+        abstract_pytree = jax.tree_util.tree_map(
+            ocp.utils.to_shape_dtype_struct, nnx.state(Model(rngs=nnx.Rngs(439482434)))
+        )
+        state = checkpoint_mgr.restore(epoch, args=ocp.args.StandardRestore(abstract_pytree))
 
-    print(m)
+        print(state)
 
-    # for epoch in range(ITS):
-    #     train_count = 0
-    #     test_count = 0
-    #     img_load_errors = 0
-    #     total_train_loss = 0.0
-    #     total_test_loss = 0.0
-    #     for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
-    #         reldirpath = os.path.relpath(dirpath, SMALL_DIR)
-    #         fulldirpath = os.path.join(FULL_DIR, reldirpath)
+        abstract_model = nnx.eval_shape(lambda: Model(rngs=nnx.Rngs(382931289)))
+        gd = nnx.graphdef(abstract_model)
 
-    #         for filename in filenames:
+        print(gd)
 
-    #             if train_count % 10 == 0 and train_count > 0:
+        m = nnx.merge(gd, state)
 
-    #                 # checkpoint_manager.save(epoch, args=ocp.args.Composite(
-    #                 #     state=ocp.args.StandardSave(m),
-    #                 #     # extra_params=ocp.args.JsonSave(extra_params),
-    #                 # ))
-    #                 state = nnx.state(m)
-    #                 checkpoint_mgr.save(epoch, state)
+        print(m)
 
-    #                 # state = nnx.state(m)
-    #                 # ser = flax.serialization.to_bytes(state)
+    outdir = erase_and_create_empty('/tmp/image-sr-output')
 
-    #                 # with open('./model.ser', 'wb') as w:
-    #                 #     w.write(ser)
+    for i, path in enumerate(args.image_paths):
+        try:
+            small_np = imageio.v3.imread(path, mode="RGB")
+        except Exception:
+            sys.stderr.write(f"Couldn't load {path}\n")
+            continue
+
+        small: jax.Array = jnp.asarray(
+            small_np, dtype='float32').reshape(1, *small_np.shape)
+        
+        # pred = m(small)
+
+        pred = small
+
+        new_shape = list(pred.shape)[1:]
+
+        pred = pred.reshape(*new_shape)
+
+        # Back to Numpy
+        pred = onp.array(pred)
+
+        outpath = outdir / f"{i}.png"
+
+        with open(outpath, 'wb') as w:
+            imageio.v3.imwrite(outpath, pred, mode="RGB")
+
+        # for epoch in range(ITS):
+        #     train_count = 0
+        #     test_count = 0
+        #     img_load_errors = 0
+        #     total_train_loss = 0.0
+        #     total_test_loss = 0.0
+        #     for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
+        #         reldirpath = os.path.relpath(dirpath, SMALL_DIR)
+        #         fulldirpath = os.path.join(FULL_DIR, reldirpath)
+
+        #         for filename in filenames:
+
+        #             if train_count % 10 == 0 and train_count > 0:
+
+        #                 # checkpoint_manager.save(epoch, args=ocp.args.Composite(
+        #                 #     state=ocp.args.StandardSave(m),
+        #                 #     # extra_params=ocp.args.JsonSave(extra_params),
+        #                 # ))
+        #                 state = nnx.state(m)
+        #                 checkpoint_mgr.save(epoch, state)
+
+        #                 # state = nnx.state(m)
+        #                 # ser = flax.serialization.to_bytes(state)
+
+        #                 # with open('./model.ser', 'wb') as w:
+        #                 #     w.write(ser)
