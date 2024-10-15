@@ -25,9 +25,30 @@ class Model(nnx.Module):
             padding=1,
             rngs=rngs
         )
+        self.embedders = [
+            nnx.Conv(
+                in_features=3,
+                out_features=3,
+                kernel_size=(3,3),
+                padding=0,
+                rngs=rngs,
+            )
+            for i in range(30)
+        ]
 
     def __call__(self, x: jax.Array):
-        return self.deepen(self.upscale(x))
+        # Main line of dilated convolution plus regular conv layer(s)
+        out = self.deepen(self.upscale(x))
+
+        # Generate a 1x4x4x3 image embedding
+        rescaled = jax.image.resize(x, (1, 64, 64, 3), "linear")
+        embed = rescaled
+        for emb in self.embedders:
+            embed = emb(embed)
+
+        # Convolve the main line output by the embedding
+        return jax.scipy.signal.convolve(out, embed, mode='same', method='direct')
+        
 
 
 @jax.jit
