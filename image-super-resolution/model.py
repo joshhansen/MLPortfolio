@@ -33,7 +33,7 @@ class Model(nnx.Module):
                 padding=0,
                 rngs=rngs,
             )
-            for i in range(30)
+            for i in range(15)
         ]
 
     def __call__(self, x: jax.Array):
@@ -41,7 +41,7 @@ class Model(nnx.Module):
         out = self.deepen(self.upscale(x))
 
         # Generate a 1x4x4x3 image embedding
-        rescaled = jax.image.resize(x, (1, 64, 64, 3), "linear")
+        rescaled = jax.image.resize(x, (1, 32, 32, 3), "linear")
         embed = rescaled
         for emb in self.embedders:
             embed = emb(embed)

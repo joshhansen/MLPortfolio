@@ -1,17 +1,24 @@
+# Python stdlib imports
 import argparse
+from collections import deque
 import os
 from pathlib import Path
 import shutil
 import sys
 
+#JAX-y imports
 from flax import nnx
 from flax.training.train_state import TrainState
-import imageio
 import jax
 import jax.numpy as jnp
 import optax
 import orbax.checkpoint as ocp
 
+# Other 3rd party imports
+# import guppy
+import imageio
+
+# Self imports
 from model import Model, apply_model, erase_and_create_empty
 
 
@@ -64,9 +71,17 @@ def is_valid(filename: str) -> bool:
     return basename.endswith('1')
 
 
+def mean(seq):
+    total = 0.0
 
+    for x in seq:
+        total += x
+
+    return total / len(seq)
 
 if __name__ == "__main__":
+    # h = guppy.hpy()
+    
     parser = argparse.ArgumentParser(
         prog='Image super-resolution trainer',
         description='Trains an image sr model')
@@ -86,6 +101,7 @@ if __name__ == "__main__":
     LR = 0.001
     MOMENTUM = 0.1
     ITS = 100
+    RECENT = 100
 
     rngs = nnx.Rngs(98239)
 
@@ -101,6 +117,9 @@ if __name__ == "__main__":
             img_load_errors = 0
             total_train_loss = 0.0
             total_test_loss = 0.0
+
+            recent_train_losses: deque[float] = deque()
+            recent_test_losses: deque[float] = deque()
             for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
                 reldirpath = os.path.relpath(dirpath, SMALL_DIR)
                 fulldirpath = os.path.join(FULL_DIR, reldirpath)
@@ -169,10 +188,20 @@ if __name__ == "__main__":
                     if testing:
                         test_count += 1
                         pred = m(small)
-                        total_test_loss += loss(pred, full)
+                        l = loss(pred, full)
+                        total_test_loss += l
+
+                        recent_test_losses.append(l)
+                        if len(recent_test_losses) > RECENT:
+                            recent_test_losses.popleft()
                     elif not valid:
                         train_count += 1
-                        total_train_loss += train_step(m, opt, small, full)
+                        l = train_step(m, opt, small, full)
+                        total_train_loss += l
+
+                        recent_train_losses.append(l)
+                        if len(recent_train_losses) > RECENT:
+                            recent_train_losses.popleft()
 
                     if train_count % 10 == 0 and train_count > 0:
                         epoch_avg_train_loss = total_train_loss / train_count
@@ -181,28 +210,29 @@ if __name__ == "__main__":
                         except ZeroDivisionError:
                             epoch_avg_test_loss = float('nan')
 
+                        recent_train_loss = mean(recent_train_losses)
+                        recent_test_loss = mean(recent_test_losses)
+
                         print(
-                            'epoch:% 3d, train_count: %d, avg train loss: %.4f, avg test_loss: %.4f, imloaderrs: %d'
+                            'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
                             % (
                                 epoch,
                                 train_count,
                                 epoch_avg_train_loss,
+                                recent_train_loss,
                                 epoch_avg_test_loss,
+                                recent_test_loss,
                                 img_load_errors
                             )
                         )
 
                         sys.stdout.flush()
 
-                        # checkpoint_manager.save(epoch, args=ocp.args.Composite(
-                        #     state=ocp.args.StandardSave(m),
-                        #     # extra_params=ocp.args.JsonSave(extra_params),
-                        # ))
+                        if train_count % 100 == 0 and train_count > 0:
+                            # Prevent JIT compilation caches from growing without end
+                            jax.clear_caches()
+
+                        # print(h.heap())
+
                         state = nnx.state(m)
                         checkpoint_mgr.save(epoch, args=ocp.args.StandardSave(state))
-
-                        # state = nnx.state(m)
-                        # ser = flax.serialization.to_bytes(state)
-
-                        # with open('./model.ser', 'wb') as w:
-                        #     w.write(ser)
