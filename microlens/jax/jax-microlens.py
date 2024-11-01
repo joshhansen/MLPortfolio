@@ -4,7 +4,10 @@ import sys
 import imageio.v3 as iio
 # import skvideo.io
 
-video_dir = "/blok/@data/cn/edu/westlake/recsys/MicroLens-100k-Dataset/MicroLens-100k_videos"
+HOME = os.environ['HOME']
+# data_dir = "/blok/@data"
+data_dir = f"{HOME}/Data"
+video_dir = f"{data_dir}/cn/edu/westlake/recsys/MicroLens-100k-Dataset/MicroLens-100k_videos"
 
 if __name__=="__main__":
     for filename in os.listdir(video_dir):

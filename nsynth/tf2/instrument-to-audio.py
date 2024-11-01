@@ -17,8 +17,8 @@ if __name__ == "__main__":
    # 'input_1': tf.io.RaggedFeature(dtype=tf.float32),
    # 'input_1': {
     # 'audio': tf.io.RaggedFeature(dtype=tf.float32),
-   'audio': tf.io.FixedLenFeature((AUDIO_LEN,), tf.float32),
-   'instrument': tf.io.FixedLenFeature((), tf.int64),
+   'audio': tf.io.FixedLenFeature((1, AUDIO_LEN,), tf.float32),
+   'instrument': tf.io.FixedLenFeature((1, ), tf.int64),
    'pitch': tf.io.FixedLenFeature((), tf.int64),
    #  'sample_rate': tf.io.FixedLenFeature((), tf.int64),
    #  }
@@ -56,9 +56,12 @@ if __name__ == "__main__":
 
  input_len = INSTR_EMBED_DIM + 1# +1 for pitch
 
- instrument = tf.keras.Input((INSTR_EMBED_DIM, 1,), BATCH_SIZE, name="instrument")
+ instrument = tf.keras.Input((1, INSTR_EMBED_DIM,), BATCH_SIZE, name="instrument")
+ print(f"instrument shape: {instrument.shape}")
  pitch = tf.keras.Input((1,1,), BATCH_SIZE, name="pitch")
- inputs = tf.keras.layers.Concatenate(axis=1)([instrument, pitch])
+ print(f"pitch shape: {pitch.shape}")
+ inputs = tf.keras.layers.Concatenate(axis=2)([instrument, pitch])
+ print(f"inputs shape: {inputs.shape}")
  y = inputs
  
  # x = tf.keras.Input((input_len,1,), BATCH_SIZE)
@@ -67,18 +70,25 @@ if __name__ == "__main__":
  # x = tf.keras.Input((64000,1,), BATCH_SIZE)
  # y = x
 
- BLOCKS=1 #3
- LAYERS=8
+ BLOCKS=3
+ LAYERS=6
 
  for block in range(BLOCKS):
   for layer in range(LAYERS):
-   dilation = 2**layer
+   # dilation = 2**layer
+   dilation = 2**(LAYERS - layer - 1)
+
+   # if block == 0:
+   #  filters = 2**layer
+   # else:
+   #  filters = 
 
    if block < BLOCKS-1:
     filters = 32
    else:
     filters = 2**(LAYERS - layer - 1)
 
+   print(f"block {block} layer {layer} dilation {dilation} filters {filters}")
    y = tf.keras.layers.Conv1DTranspose(
     filters,
     2,

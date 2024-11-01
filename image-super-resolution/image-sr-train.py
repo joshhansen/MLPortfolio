@@ -1,12 +1,12 @@
 # Python stdlib imports
 import argparse
 from collections import deque
+import math
 import os
 from pathlib import Path
-import shutil
 import sys
 
-#JAX-y imports
+# JAX-y imports
 from flax import nnx
 from flax.training.train_state import TrainState
 import jax
@@ -39,12 +39,12 @@ def train_epoch(
     return state, loss
 
 
-@jax.jit
+# @jax.jit
 def loss(pred: jax.Array, full: jax.Array) -> jax.Array:
     return jnp.mean(optax.squared_error(pred, full))
 
 
-@nnx.jit
+# @nnx.jit
 def train_step(
     m: Model,
     opt: nnx.Optimizer,
@@ -56,7 +56,14 @@ def train_step(
         return loss(pred, full)
 
     l, grads = nnx.value_and_grad(loss_fn)(m)
+
+    print("value_and_grad calculated")
+    sys.stdout.flush()
+
     opt.update(grads)  # in-place updates
+
+    print("optimizer updated")
+    sys.stdout.flush()
 
     return l
 
@@ -72,6 +79,9 @@ def is_valid(filename: str) -> bool:
 
 
 def mean(seq):
+    if len(seq) == 0:
+        return math.nan
+
     total = 0.0
 
     for x in seq:
@@ -79,37 +89,46 @@ def mean(seq):
 
     return total / len(seq)
 
+
 if __name__ == "__main__":
     # h = guppy.hpy()
-    
+
     parser = argparse.ArgumentParser(
         prog='Image super-resolution trainer',
         description='Trains an image sr model')
+    parser.add_argument("small_dir")
+    parser.add_argument("large_dir")
     parser.add_argument('output_dir')
 
     args = parser.parse_args()
-    
-    HOME = os.environ['HOME']
-    DATA_DIR = os.path.join(
-        os.environ['HOME'], "Data/com/github/cvdfoundation/google-landmark")
-    SMALL_DIR = os.path.join(DATA_DIR, "train_downsampled")
-    FULL_DIR = os.path.join(DATA_DIR, "train")
 
-    print(f"DATA_DIR: {DATA_DIR}")
+    print(args)
+
+    HOME = os.environ['HOME']
+    # DATA_DIR = args.training_images_dir
+    # DATA_DIR = os.path.join(
+    #     os.environ['HOME'], "Data/com/github/cvdfoundation/google-landmark")
+    # SMALL_DIR = os.path.join(DATA_DIR, "train_downsampled")
+    # FULL_DIR = os.path.join(DATA_DIR, "train")
+
+    # print(f"DATA_DIR: {DATA_DIR}")
+
+    SMALL_DIR = args.small_dir
+    LARGE_DIR = args.large_dir
     sys.stdout.flush()
 
-    LR = 0.001
-    MOMENTUM = 0.1
+    LR = 1e-4
     ITS = 100
     RECENT = 100
 
     rngs = nnx.Rngs(98239)
 
     m = Model(rngs=rngs)
-    opt = nnx.Optimizer(m, optax.adam(1e-3))
+    opt = nnx.Optimizer(m, optax.adam(LR))
     with ocp.CheckpointManager(
         erase_and_create_empty(args.output_dir),
-        options=ocp.CheckpointManagerOptions(max_to_keep=3, save_interval_steps=2),
+        options=ocp.CheckpointManagerOptions(
+            max_to_keep=3, save_interval_steps=2),
     ) as checkpoint_mgr:
         for epoch in range(ITS):
             train_count = 0
@@ -122,7 +141,7 @@ if __name__ == "__main__":
             recent_test_losses: deque[float] = deque()
             for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
                 reldirpath = os.path.relpath(dirpath, SMALL_DIR)
-                fulldirpath = os.path.join(FULL_DIR, reldirpath)
+                fulldirpath = os.path.join(LARGE_DIR, reldirpath)
 
                 for filename in filenames:
                     testing = is_testing(filename)
@@ -132,6 +151,7 @@ if __name__ == "__main__":
                     full_path = os.path.join(fulldirpath, filename)
 
                     print(small_path)
+                    sys.stdout.flush()
 
                     try:
                         small_np = imageio.v3.imread(small_path, mode="RGB")
@@ -140,6 +160,9 @@ if __name__ == "__main__":
                         sys.stderr.write(f"Couldn't load {small_path}\n")
                         continue
 
+                    print("Loaded small")
+                    sys.stdout.flush()
+
                     try:
                         full_np = imageio.v3.imread(full_path, mode="RGB")
                     except Exception:
@@ -147,13 +170,25 @@ if __name__ == "__main__":
                         sys.stderr.write(f"Couldn't load {full_path}\n")
                         continue
 
-                    small: jax.Array = jnp.asarray(small_np, dtype='float32').reshape(1, *small_np.shape)
-                    full: jax.Array = jnp.asarray(full_np, dtype='float32').reshape(1, *full_np.shape)
+                    print("Loaded large")
+                    sys.stdout.flush()
+
+                    small: jax.Array = jnp.asarray(
+                        small_np, dtype='float32').reshape(1, *small_np.shape)
+
+                    print("converted small")
+                    sys.stdout.flush()
+
+                    full: jax.Array = jnp.asarray(
+                        full_np, dtype='float32').reshape(1, *full_np.shape)
+
+                    print("converted large")
+                    sys.stdout.flush()
 
                     # print(f"Small shape: {small.shape}")
                     # print(f"Full shape: {full.shape}")
 
-                    sys.stdout.flush()
+                    # sys.stdout.flush()
 
                     small_new_shape = list(small.shape)
                     full_new_shape = list(full.shape)
@@ -179,15 +214,37 @@ if __name__ == "__main__":
                     if resize_small:
                         small = jnp.resize(small, tuple(small_new_shape))
 
+                    print(f"resized small to {small.shape}")
+                    sys.stdout.flush()
+
                     if resize_full:
                         full = jnp.resize(full, tuple(full_new_shape))
+
+                    print(f"resized large to {full.shape}")
+                    sys.stdout.flush()
+
+                    large_area = full.shape[0] * full.shape[1] * full.shape[2]
+                    print(f"large area: {large_area}")
+
+                    # FIXME remove when we have enough memory?
+                    # Failing area is 60217344
+                    # Failing area is 49835040
+                    if large_area > 40000000:
+                        continue
 
                     # print(f"small_new_shape: {small_new_shape}")
                     # print(f"full_new_shape: {full_new_shape}")
 
                     if testing:
+                        print("testing")
+                        sys.stdout.flush()
+
                         test_count += 1
                         pred = m(small)
+
+                        print("model invoked")
+                        sys.stdout.flush()
+
                         l = loss(pred, full)
                         total_test_loss += l
 
@@ -195,6 +252,8 @@ if __name__ == "__main__":
                         if len(recent_test_losses) > RECENT:
                             recent_test_losses.popleft()
                     elif not valid:
+                        print("not testing")
+                        sys.stdout.flush()
                         train_count += 1
                         l = train_step(m, opt, small, full)
                         total_train_loss += l
@@ -202,6 +261,9 @@ if __name__ == "__main__":
                         recent_train_losses.append(l)
                         if len(recent_train_losses) > RECENT:
                             recent_train_losses.popleft()
+
+                    print("calculated loss")
+                    sys.stdout.flush()
 
                     if train_count % 10 == 0 and train_count > 0:
                         epoch_avg_train_loss = total_train_loss / train_count
@@ -235,4 +297,5 @@ if __name__ == "__main__":
                         # print(h.heap())
 
                         state = nnx.state(m)
-                        checkpoint_mgr.save(epoch, args=ocp.args.StandardSave(state))
+                        checkpoint_mgr.save(
+                            train_count, args=ocp.args.StandardSave(state))
