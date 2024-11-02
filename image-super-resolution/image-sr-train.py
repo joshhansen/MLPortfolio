@@ -87,6 +87,8 @@ def mean(seq):
 if __name__ == "__main__":
     # h = guppy.hpy()
 
+    print(jax.devices())
+
     parser = argparse.ArgumentParser(
         prog='Image super-resolution trainer',
         description='Trains an image sr model')
@@ -99,7 +101,8 @@ if __name__ == "__main__":
     print(args)
 
     FACTOR=2
-    BATCH=10
+    BATCH=16
+    DTYPE='float16'
 
     
     SMALL_CROP_WIDTH=700
@@ -125,6 +128,7 @@ if __name__ == "__main__":
     RECENT = 100
 
     rngs = nnx.Rngs(98239)
+    mesh = jax.make_mesh((4,), jax.sharding.PartitionSpec('path'))
 
     m = Model(rngs=rngs)
     opt = nnx.Optimizer(m, optax.adam(LR))
@@ -134,6 +138,7 @@ if __name__ == "__main__":
             max_to_keep=3, save_interval_steps=2),
     ) as checkpoint_mgr:
         for epoch in range(ITS):
+            count = 0
             train_count = 0
             test_count = 0
             img_load_errors = 0
@@ -151,6 +156,8 @@ if __name__ == "__main__":
                 largedirpath = os.path.join(LARGE_DIR, reldirpath)
 
                 for filename in filenames:
+                    count += 1
+                    
                     testing = is_testing(filename)
                     valid = is_valid(filename)
 
@@ -178,9 +185,9 @@ if __name__ == "__main__":
                         # print("Too small")
                         continue
 
-                    small: jax.Array = jnp.asarray(small_np, dtype='float32')
+                    small: jax.Array = jnp.asarray(small_np, dtype=DTYPE)
 
-                    large: jax.Array = jnp.asarray(large_np, dtype='float32')
+                    large: jax.Array = jnp.asarray(large_np, dtype=DTYPE)
 
                     del small_np
                     del large_np
@@ -200,6 +207,12 @@ if __name__ == "__main__":
                         Y = jnp.stack(batch_large)
                         batch_small = list()
                         batch_large = list()
+
+                        # sharding = jax.sharding.PositionalSharding(jax.devices())
+                        sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('path'))
+                        X = jax.device_put(X, sharding)
+                        Y = jax.device_put(Y, sharding)
+                        
 
                         # pre_upscaled_shape = (X.shape[0], X.shape[1] * FACTOR, X.shape[2] * FACTOR, INTERMEDIATE_FEATS)
                         # X = jax.image.resize(X, pre_upscaled_shape, "nearest")
@@ -224,39 +237,43 @@ if __name__ == "__main__":
                             if len(recent_train_losses) > RECENT:
                                 recent_train_losses.popleft()
 
-                        if train_count % 10 == 0 and train_count > 0:
+                    if count % 10 == 0 and count > 0:
+                        try:
                             epoch_avg_train_loss = total_train_loss / train_count
-                            try:
-                                epoch_avg_test_loss = total_test_loss / test_count
-                            except ZeroDivisionError:
-                                epoch_avg_test_loss = float('nan')
+                        except ZeroDivisionError:
+                            epoch_avg_train_loss = float('nan')
+                            
+                        try:
+                            epoch_avg_test_loss = total_test_loss / test_count
+                        except ZeroDivisionError:
+                            epoch_avg_test_loss = float('nan')
 
-                            recent_train_loss = mean(recent_train_losses)
-                            recent_test_loss = mean(recent_test_losses)
+                        recent_train_loss = mean(recent_train_losses)
+                        recent_test_loss = mean(recent_test_losses)
 
-                            print(
-                                'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
-                                % (
-                                    epoch,
-                                    train_count,
-                                    epoch_avg_train_loss,
-                                    recent_train_loss,
-                                    epoch_avg_test_loss,
-                                    recent_test_loss,
-                                    img_load_errors
-                                )
+                        print(
+                            'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
+                            % (
+                                epoch,
+                                train_count,
+                                epoch_avg_train_loss,
+                                recent_train_loss,
+                                epoch_avg_test_loss,
+                                recent_test_loss,
+                                img_load_errors
                             )
+                        )
 
-                            sys.stdout.flush()
+                        sys.stdout.flush()
 
-                            if train_count % 100 == 0 and train_count > 0:
-                                # Prevent JIT compilation caches from growing without end
-                                jax.clear_caches()
+                        if count % 100 == 0 and train_count > 0:
+                            # Prevent JIT compilation caches from growing without end
+                            jax.clear_caches()
 
-                            # print(h.heap())
+                        # print(h.heap())
 
-                            state = nnx.state(m)
-                            checkpoint_mgr.save(
-                                train_count, args=ocp.args.StandardSave(state))
+                        state = nnx.state(m)
+                        checkpoint_mgr.save(
+                            train_count, args=ocp.args.StandardSave(state))
 
-                            # jax.profiler.save_device_memory_profile("/tmp/memory.prof")
+                        # jax.profiler.save_device_memory_profile("/tmp/memory.prof")
