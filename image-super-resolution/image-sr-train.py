@@ -19,7 +19,7 @@ import orbax.checkpoint as ocp
 import imageio
 
 # Self imports
-from model import Model, apply_model, erase_and_create_empty
+from model import Model, apply_model, erase_and_create_empty, INTERMEDIATE_FEATS
 
 
 @jax.jit
@@ -39,31 +39,25 @@ def train_epoch(
     return state, loss
 
 
-# @jax.jit
-def loss(pred: jax.Array, full: jax.Array) -> jax.Array:
-    return jnp.mean(optax.squared_error(pred, full))
+@jax.jit
+def loss(pred: jax.Array, large: jax.Array) -> jax.Array:
+    return jnp.mean(optax.squared_error(pred, large))
 
 
-# @nnx.jit
+@nnx.jit
 def train_step(
     m: Model,
     opt: nnx.Optimizer,
     small: jax.Array,
-    full: jax.Array
+    large: jax.Array
 ):
     def loss_fn(m: Model):
         pred = m(small)
-        return loss(pred, full)
+        return loss(pred, large)
 
     l, grads = nnx.value_and_grad(loss_fn)(m)
 
-    print("value_and_grad calculated")
-    sys.stdout.flush()
-
     opt.update(grads)  # in-place updates
-
-    print("optimizer updated")
-    sys.stdout.flush()
 
     return l
 
@@ -104,6 +98,15 @@ if __name__ == "__main__":
 
     print(args)
 
+    FACTOR=2
+    BATCH=10
+
+    
+    SMALL_CROP_WIDTH=700
+    SMALL_CROP_HEIGHT=700
+    LARGE_CROP_WIDTH=FACTOR*SMALL_CROP_WIDTH
+    LARGE_CROP_HEIGHT=FACTOR*SMALL_CROP_HEIGHT
+
     HOME = os.environ['HOME']
     # DATA_DIR = args.training_images_dir
     # DATA_DIR = os.path.join(
@@ -139,16 +142,20 @@ if __name__ == "__main__":
 
             recent_train_losses: deque[float] = deque()
             recent_test_losses: deque[float] = deque()
+
+            batch_small: list[jax.Array] = list()
+            batch_large: list[jax.Array] = list()
+
             for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
                 reldirpath = os.path.relpath(dirpath, SMALL_DIR)
-                fulldirpath = os.path.join(LARGE_DIR, reldirpath)
+                largedirpath = os.path.join(LARGE_DIR, reldirpath)
 
                 for filename in filenames:
                     testing = is_testing(filename)
                     valid = is_valid(filename)
 
                     small_path = os.path.join(dirpath, filename)
-                    full_path = os.path.join(fulldirpath, filename)
+                    large_path = os.path.join(largedirpath, filename)
 
                     print(small_path)
                     sys.stdout.flush()
@@ -160,142 +167,96 @@ if __name__ == "__main__":
                         sys.stderr.write(f"Couldn't load {small_path}\n")
                         continue
 
-                    print("Loaded small")
-                    sys.stdout.flush()
-
                     try:
-                        full_np = imageio.v3.imread(full_path, mode="RGB")
+                        large_np = imageio.v3.imread(large_path, mode="RGB")
                     except Exception:
                         img_load_errors += 1
-                        sys.stderr.write(f"Couldn't load {full_path}\n")
+                        sys.stderr.write(f"Couldn't load {large_path}\n")
                         continue
 
-                    print("Loaded large")
-                    sys.stdout.flush()
-
-                    small: jax.Array = jnp.asarray(
-                        small_np, dtype='float32').reshape(1, *small_np.shape)
-
-                    print("converted small")
-                    sys.stdout.flush()
-
-                    full: jax.Array = jnp.asarray(
-                        full_np, dtype='float32').reshape(1, *full_np.shape)
-
-                    print("converted large")
-                    sys.stdout.flush()
-
-                    # print(f"Small shape: {small.shape}")
-                    # print(f"Full shape: {full.shape}")
-
-                    # sys.stdout.flush()
-
-                    small_new_shape = list(small.shape)
-                    full_new_shape = list(full.shape)
-                    resize_small = False
-                    resize_full = False
-                    for dim in (1, 2):
-                        assert full_new_shape[dim] > small_new_shape[dim]
-
-                        # Make sure the larger dim is even
-                        if full_new_shape[dim] % 2 == 1:
-                            resize_full = True
-                            full_new_shape[dim] -= 1
-
-                        assert full_new_shape[dim] % 2 == 0
-
-                        # Decrease the smaller dim until 2*smaller = larger
-                        while small_new_shape[dim] * 2 > full_new_shape[dim]:
-                            resize_small = True
-                            small_new_shape[dim] -= 1
-
-                        assert small_new_shape[dim] * 2 == full_new_shape[dim]
-
-                    if resize_small:
-                        small = jnp.resize(small, tuple(small_new_shape))
-
-                    print(f"resized small to {small.shape}")
-                    sys.stdout.flush()
-
-                    if resize_full:
-                        full = jnp.resize(full, tuple(full_new_shape))
-
-                    print(f"resized large to {full.shape}")
-                    sys.stdout.flush()
-
-                    large_area = full.shape[0] * full.shape[1] * full.shape[2]
-                    print(f"large area: {large_area}")
-
-                    # FIXME remove when we have enough memory?
-                    # Failing area is 60217344
-                    # Failing area is 49835040
-                    if large_area > 40000000:
+                    if small_np.shape[0] < SMALL_CROP_WIDTH or small_np.shape[1] < SMALL_CROP_HEIGHT:
+                        # print("Too small")
                         continue
 
-                    # print(f"small_new_shape: {small_new_shape}")
-                    # print(f"full_new_shape: {full_new_shape}")
+                    small: jax.Array = jnp.asarray(small_np, dtype='float32')
 
-                    if testing:
-                        print("testing")
-                        sys.stdout.flush()
+                    large: jax.Array = jnp.asarray(large_np, dtype='float32')
 
-                        test_count += 1
-                        pred = m(small)
+                    del small_np
+                    del large_np
 
-                        print("model invoked")
-                        sys.stdout.flush()
+                    small_new_shape = (SMALL_CROP_WIDTH, SMALL_CROP_HEIGHT, 3)
+                    large_new_shape = (LARGE_CROP_WIDTH, LARGE_CROP_HEIGHT, 3)
 
-                        l = loss(pred, full)
-                        total_test_loss += l
+                    small = jnp.resize(small, small_new_shape)
+                    large = jnp.resize(large, large_new_shape)
 
-                        recent_test_losses.append(l)
-                        if len(recent_test_losses) > RECENT:
-                            recent_test_losses.popleft()
-                    elif not valid:
-                        print("not testing")
-                        sys.stdout.flush()
-                        train_count += 1
-                        l = train_step(m, opt, small, full)
-                        total_train_loss += l
+                    batch_small.append(small)
+                    batch_large.append(large)
 
-                        recent_train_losses.append(l)
-                        if len(recent_train_losses) > RECENT:
-                            recent_train_losses.popleft()
+                    if len(batch_small) == BATCH:
 
-                    print("calculated loss")
-                    sys.stdout.flush()
+                        X = jnp.stack(batch_small)
+                        Y = jnp.stack(batch_large)
+                        batch_small = list()
+                        batch_large = list()
 
-                    if train_count % 10 == 0 and train_count > 0:
-                        epoch_avg_train_loss = total_train_loss / train_count
-                        try:
-                            epoch_avg_test_loss = total_test_loss / test_count
-                        except ZeroDivisionError:
-                            epoch_avg_test_loss = float('nan')
+                        # pre_upscaled_shape = (X.shape[0], X.shape[1] * FACTOR, X.shape[2] * FACTOR, INTERMEDIATE_FEATS)
+                        # X = jax.image.resize(X, pre_upscaled_shape, "nearest")
 
-                        recent_train_loss = mean(recent_train_losses)
-                        recent_test_loss = mean(recent_test_losses)
+                        if testing:
+                            test_count += BATCH
+                            pred = m(X)
 
-                        print(
-                            'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
-                            % (
-                                epoch,
-                                train_count,
-                                epoch_avg_train_loss,
-                                recent_train_loss,
-                                epoch_avg_test_loss,
-                                recent_test_loss,
-                                img_load_errors
+                            l = loss(pred, Y)
+                            total_test_loss += l
+
+                            recent_test_losses.append(l / BATCH)
+                            if len(recent_test_losses) > RECENT:
+                                recent_test_losses.popleft()
+                        elif not valid:
+                            sys.stdout.flush()
+                            train_count += BATCH
+                            l = train_step(m, opt, X, Y)
+                            total_train_loss += l
+
+                            recent_train_losses.append(l / BATCH)
+                            if len(recent_train_losses) > RECENT:
+                                recent_train_losses.popleft()
+
+                        if train_count % 10 == 0 and train_count > 0:
+                            epoch_avg_train_loss = total_train_loss / train_count
+                            try:
+                                epoch_avg_test_loss = total_test_loss / test_count
+                            except ZeroDivisionError:
+                                epoch_avg_test_loss = float('nan')
+
+                            recent_train_loss = mean(recent_train_losses)
+                            recent_test_loss = mean(recent_test_losses)
+
+                            print(
+                                'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
+                                % (
+                                    epoch,
+                                    train_count,
+                                    epoch_avg_train_loss,
+                                    recent_train_loss,
+                                    epoch_avg_test_loss,
+                                    recent_test_loss,
+                                    img_load_errors
+                                )
                             )
-                        )
 
-                        sys.stdout.flush()
+                            sys.stdout.flush()
 
-                        if train_count % 100 == 0 and train_count > 0:
-                            # Prevent JIT compilation caches from growing without end
-                            jax.clear_caches()
+                            if train_count % 100 == 0 and train_count > 0:
+                                # Prevent JIT compilation caches from growing without end
+                                jax.clear_caches()
 
-                        # print(h.heap())
+                            # print(h.heap())
 
-                        state = nnx.state(m)
-                        checkpoint_mgr.save(
-                            train_count, args=ocp.args.StandardSave(state))
+                            state = nnx.state(m)
+                            checkpoint_mgr.save(
+                                train_count, args=ocp.args.StandardSave(state))
+
+                            # jax.profiler.save_device_memory_profile("/tmp/memory.prof")

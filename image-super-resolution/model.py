@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-DEEP = 3
+# DEEP = 3
 
 INTERMEDIATE_FEATS = 16
 
