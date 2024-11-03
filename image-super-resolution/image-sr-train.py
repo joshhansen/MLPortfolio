@@ -61,16 +61,13 @@ def train_step(
 
     return l
 
-
-def is_testing(filename: str) -> bool:
+def data_part(filename: str) -> str:
     basename = Path(filename).stem
-    return basename.endswith('0')
-
-
-def is_valid(filename: str) -> bool:
-    basename = Path(filename).stem
-    return basename.endswith('1')
-
+    if basename.endswith('0'):
+        return 'test'
+    if basename.endswith('1'):
+        return 'valid'
+    return 'train'
 
 def mean(seq):
     if len(seq) == 0:
@@ -87,23 +84,25 @@ def mean(seq):
 if __name__ == "__main__":
     # h = guppy.hpy()
 
-    print(jax.devices())
-
     parser = argparse.ArgumentParser(
         prog='Image super-resolution trainer',
         description='Trains an image sr model')
     parser.add_argument("small_dir")
     parser.add_argument("large_dir")
     parser.add_argument('output_dir')
+    parser.add_argument('factor', type=int)
+    parser.add_argument('gpu', type=int)
 
     args = parser.parse_args()
 
     print(args)
 
-    FACTOR=2
-    BATCH=16
+    FACTOR=args.factor
+    DEVICE=jax.devices()[args.gpu]
+    BATCH=10
     DTYPE='float16'
 
+    print(DEVICE)
     
     SMALL_CROP_WIDTH=700
     SMALL_CROP_HEIGHT=700
@@ -121,21 +120,25 @@ if __name__ == "__main__":
 
     SMALL_DIR = args.small_dir
     LARGE_DIR = args.large_dir
-    sys.stdout.flush()
 
     LR = 1e-4
     ITS = 100
     RECENT = 100
 
     rngs = nnx.Rngs(98239)
-    mesh = jax.make_mesh((4,), jax.sharding.PartitionSpec('path'))
+    # mesh = jax.make_mesh((4,), jax.sharding.PartitionSpec('path'))
+    # sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('path'))
 
-    m = Model(rngs=rngs)
+    m = Model(rngs, FACTOR)
     opt = nnx.Optimizer(m, optax.adam(LR))
     with ocp.CheckpointManager(
         erase_and_create_empty(args.output_dir),
         options=ocp.CheckpointManagerOptions(
-            max_to_keep=3, save_interval_steps=2),
+            # best_fn=lambda metrics: metrics['test_loss'],
+            # best_mode='min',
+            max_to_keep=3,
+            save_interval_steps=2
+        ),
     ) as checkpoint_mgr:
         for epoch in range(ITS):
             count = 0
@@ -148,8 +151,10 @@ if __name__ == "__main__":
             recent_train_losses: deque[float] = deque()
             recent_test_losses: deque[float] = deque()
 
-            batch_small: list[jax.Array] = list()
-            batch_large: list[jax.Array] = list()
+            batch_train_small: list[jax.Array] = list()
+            batch_train_large: list[jax.Array] = list()
+            batch_test_small: list[jax.Array] = list()
+            batch_test_large: list[jax.Array] = list()
 
             for dirpath, _dirnames, filenames in os.walk(SMALL_DIR):
                 reldirpath = os.path.relpath(dirpath, SMALL_DIR)
@@ -157,15 +162,13 @@ if __name__ == "__main__":
 
                 for filename in filenames:
                     count += 1
-                    
-                    testing = is_testing(filename)
-                    valid = is_valid(filename)
+
+                    part = data_part(filename)                    
 
                     small_path = os.path.join(dirpath, filename)
                     large_path = os.path.join(largedirpath, filename)
 
                     print(small_path)
-                    sys.stdout.flush()
 
                     try:
                         small_np = imageio.v3.imread(small_path, mode="RGB")
@@ -178,16 +181,13 @@ if __name__ == "__main__":
                         large_np = imageio.v3.imread(large_path, mode="RGB")
                     except Exception:
                         img_load_errors += 1
-                        sys.stderr.write(f"Couldn't load {large_path}\n")
                         continue
 
                     if small_np.shape[0] < SMALL_CROP_WIDTH or small_np.shape[1] < SMALL_CROP_HEIGHT:
-                        # print("Too small")
                         continue
 
-                    small: jax.Array = jnp.asarray(small_np, dtype=DTYPE)
-
-                    large: jax.Array = jnp.asarray(large_np, dtype=DTYPE)
+                    small: jax.Array = jnp.asarray(small_np, dtype=DTYPE, device=DEVICE)
+                    large: jax.Array = jnp.asarray(large_np, dtype=DTYPE, device=DEVICE)
 
                     del small_np
                     del large_np
@@ -198,44 +198,67 @@ if __name__ == "__main__":
                     small = jnp.resize(small, small_new_shape)
                     large = jnp.resize(large, large_new_shape)
 
-                    batch_small.append(small)
-                    batch_large.append(large)
+                    if part == 'train':
+                        batch_train_small.append(small)
+                        batch_train_large.append(large)
+                    elif part == 'test':
+                        batch_test_small.append(small)
+                        batch_test_large.append(large)
 
-                    if len(batch_small) == BATCH:
+                    checkpoint = False
+                    if len(batch_train_small) >= BATCH:
+                        X = jnp.stack(batch_train_small)
+                        Y = jnp.stack(batch_train_large)
+                        batch_train_small = list()
+                        batch_train_large = list()
 
-                        X = jnp.stack(batch_small)
-                        Y = jnp.stack(batch_large)
-                        batch_small = list()
-                        batch_large = list()
+                        # X = jax.device_put(X, sharding)
+                        # Y = jax.device_put(Y, sharding)
 
-                        # sharding = jax.sharding.PositionalSharding(jax.devices())
-                        sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('path'))
-                        X = jax.device_put(X, sharding)
-                        Y = jax.device_put(Y, sharding)
+                        train_count += BATCH
+
+                        l = train_step(m, opt, X, Y)
+                        total_train_loss += l
+
+                        recent_train_losses.append(l / BATCH)
+                        if len(recent_train_losses) > RECENT:
+                            recent_train_losses.popleft()
+
+                        checkpoint = True
+                    elif len(batch_test_small) >= BATCH:
+                        X = jnp.stack(batch_test_small)
+                        Y = jnp.stack(batch_test_large)
+                        batch_test_small = list()
+                        batch_test_large = list()
                         
+                        
+                        # X = jax.device_put(X, sharding)
+                        # Y = jax.device_put(Y, sharding)
 
-                        # pre_upscaled_shape = (X.shape[0], X.shape[1] * FACTOR, X.shape[2] * FACTOR, INTERMEDIATE_FEATS)
-                        # X = jax.image.resize(X, pre_upscaled_shape, "nearest")
+                        test_count += BATCH
 
-                        if testing:
-                            test_count += BATCH
-                            pred = m(X)
+                        pred = m(X)
 
-                            l = loss(pred, Y)
-                            total_test_loss += l
+                        l = loss(pred, Y)
+                        total_test_loss += l
 
-                            recent_test_losses.append(l / BATCH)
-                            if len(recent_test_losses) > RECENT:
-                                recent_test_losses.popleft()
-                        elif not valid:
-                            sys.stdout.flush()
-                            train_count += BATCH
-                            l = train_step(m, opt, X, Y)
-                            total_train_loss += l
+                        recent_test_losses.append(l / BATCH)
+                        if len(recent_test_losses) > RECENT:
+                            recent_test_losses.popleft()
+                        
+                        checkpoint = True
 
-                            recent_train_losses.append(l / BATCH)
-                            if len(recent_train_losses) > RECENT:
-                                recent_train_losses.popleft()
+                    if checkpoint:
+                        state = nnx.state(m)
+                        checkpoint_mgr.save(
+                            train_count,
+                            args=ocp.args.StandardSave(state),
+                            # metrics={
+                            #     'test_loss': epoch_avg_test_loss,
+                            # }
+                        )
+
+                        # jax.profiler.save_device_memory_profile("/tmp/memory.prof")
 
                     if count % 10 == 0 and count > 0:
                         try:
@@ -251,11 +274,15 @@ if __name__ == "__main__":
                         recent_train_loss = mean(recent_train_losses)
                         recent_test_loss = mean(recent_test_losses)
 
+                        print(total_train_loss)
+                        print(total_test_loss)
+
                         print(
-                            'epoch:% 3d, train_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
+                            'epoch:% 3d, train_count: %d, test_count: %d, avg train loss: %.4f, recent train loss: %.4f, avg test_loss: %.4f, recent test loss: %.4f, imloaderrs: %d'
                             % (
                                 epoch,
                                 train_count,
+                                test_count,
                                 epoch_avg_train_loss,
                                 recent_train_loss,
                                 epoch_avg_test_loss,
@@ -263,17 +290,11 @@ if __name__ == "__main__":
                                 img_load_errors
                             )
                         )
-
                         sys.stdout.flush()
 
-                        if count % 100 == 0 and train_count > 0:
-                            # Prevent JIT compilation caches from growing without end
-                            jax.clear_caches()
+                        # if count % 100 == 0 and train_count > 0:
+                        #     # Prevent JIT compilation caches from growing without end
+                        #     jax.clear_caches()
 
                         # print(h.heap())
 
-                        state = nnx.state(m)
-                        checkpoint_mgr.save(
-                            train_count, args=ocp.args.StandardSave(state))
-
-                        # jax.profiler.save_device_memory_profile("/tmp/memory.prof")
