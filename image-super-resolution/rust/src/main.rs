@@ -13,7 +13,15 @@ use walkdir::WalkDir;
 
 type fX = f32;
 
+const W_SMALL: usize = 700;
+const H_SMALL: usize = 700;
+const W_LARGE: usize = 1400;
+const H_LARGE: usize = 1400;
+const C: usize = 3;
 const INTERMEDIATE_FEATURES: usize = 15;
+
+const TRAIN_BATCH: usize = 10;
+const VALID_BATCH: usize = 10;
 
 #[derive(Parser)]
 #[command(version, about = "Image super-resolution trainer", long_about = None)]
@@ -78,20 +86,65 @@ impl ModelConfig {
 }
 
 fn load_img(img_path: &Path) -> ImageResult<DynamicImage> {
-    ImageReader::open(img_path)?.decode()
+    ImageReader::open(img_path)?.with_guessed_format()?.decode()
 }
 
-fn load_img_as_tensor<B: Backend>(img_path: &Path, dev: &B::Device) -> ImageResult<Tensor<B, 3>> {
+/// If the image is smaller than the specified minimums, Ok(None) is returned
+/// Otherwise, the image cropped to the minimums is returned
+fn load_cropped_img_as_tensor<B: Backend>(
+    img_path: &Path,
+    dev: &B::Device,
+    min_width: usize,
+    min_height: usize,
+) -> ImageResult<Option<Tensor<B, 3>>> {
     let img = load_img(img_path)?;
     let w = img.width() as usize;
     let h = img.height() as usize;
-    let c = img.color().channel_count() as usize;
+
+    if w < min_width || h < min_height {
+        return Ok(None);
+    }
+
     let bytes = img.into_rgb32f().into_vec();
 
     let flat_tensor: Tensor<B, 1> = Tensor::from_floats(&bytes[..], dev);
 
-    // FIXME Check the data layout, we're assuming a lot here
-    Ok(flat_tensor.reshape([w, h, c]))
+    // We know this because of the into_rgb32f() call which forces it to RGB
+    let c = 3usize;
+
+    // The data layout appears to be (w, h, c), see ImageBuffer::pixel_indices_unchecked
+    Ok(Some(flat_tensor.reshape([w, h, c]).slice([
+        Some((0i64, min_width as i64)),
+        Some((0i64, min_height as i64)),
+        None,
+    ])))
+}
+
+#[derive(Copy, Clone)]
+enum DatumType {
+    Train,
+    Test,
+    Valid,
+}
+
+fn datum_type(img_path: &Path) -> DatumType {
+    let last = img_path.components().last().unwrap();
+    let s = last.as_os_str().to_string_lossy();
+
+    let c = s.chars().last().unwrap();
+
+    let s_c = c.to_string();
+
+    let h = u8::from_str_radix(s_c.as_str(), 16).unwrap();
+
+    println!("{} -> {}", img_path.display(), h);
+
+    match h {
+        0 => DatumType::Test,
+        1..=9 => DatumType::Valid,
+        10..=15 => DatumType::Train,
+        _ => panic!(),
+    }
 }
 
 fn main() -> Result<(), walkdir::Error> {
@@ -110,8 +163,15 @@ fn main() -> Result<(), walkdir::Error> {
             recent_window,
         } => {
             for epoch in 0..*epochs {
+                let mut train_batch_small: Vec<Tensor<B, 3>> = Vec::with_capacity(TRAIN_BATCH);
+                let mut train_batch_large: Vec<Tensor<B, 3>> = Vec::with_capacity(TRAIN_BATCH);
+                let mut valid_batch_small: Vec<Tensor<B, 3>> = Vec::with_capacity(VALID_BATCH);
+                let mut valid_batch_large: Vec<Tensor<B, 3>> = Vec::with_capacity(VALID_BATCH);
                 for entry in WalkDir::new(small_dir) {
                     let entry = entry?;
+                    if entry.path().is_dir() {
+                        continue;
+                    }
                     let small_path = entry.path();
                     let base = small_path.components().last().unwrap();
 
@@ -121,9 +181,57 @@ fn main() -> Result<(), walkdir::Error> {
                         p
                     };
 
-                    let small = load_img_as_tensor::<B>(small_path, &dev);
+                    println!("small: {}", small_path.display());
+                    println!("large: {}", large_path.display());
 
-                    let large = load_img_as_tensor::<B>(&large_path, &dev);
+                    let small = load_cropped_img_as_tensor::<B>(small_path, &dev, W_SMALL, H_SMALL)
+                        .unwrap();
+
+                    if let Some(small) = small {
+                        let large =
+                            load_cropped_img_as_tensor::<B>(&large_path, &dev, W_LARGE, H_LARGE)
+                                .unwrap();
+
+                        if let Some(large) = large {
+                            let type_ = datum_type(small_path);
+
+                            match type_ {
+                                DatumType::Train => {
+                                    train_batch_small.push(small);
+                                    train_batch_large.push(large);
+
+                                    if train_batch_small.len() >= TRAIN_BATCH {
+                                        let small = Tensor::stack::<4>(train_batch_small, 0);
+                                        let large = Tensor::stack::<4>(train_batch_large, 0);
+                                        train_batch_small = Vec::with_capacity(TRAIN_BATCH);
+                                        train_batch_large = Vec::with_capacity(TRAIN_BATCH);
+
+                                        println!("train batch");
+                                    }
+                                }
+                                DatumType::Valid => {
+                                    valid_batch_small.push(small);
+                                    valid_batch_large.push(large);
+
+                                    if valid_batch_small.len() >= VALID_BATCH {
+                                        let small = Tensor::stack::<4>(valid_batch_small, 0);
+                                        let large = Tensor::stack::<4>(valid_batch_large, 0);
+                                        valid_batch_small = Vec::with_capacity(VALID_BATCH);
+                                        valid_batch_large = Vec::with_capacity(VALID_BATCH);
+
+                                        println!("valid batch");
+                                    }
+                                }
+                                DatumType::Test => {
+                                    // do nothing
+                                }
+                            }
+                        } else {
+                            println!("\tlarge too small");
+                        }
+                    } else {
+                        println!("\tsmall too small");
+                    }
                 }
             }
         }
