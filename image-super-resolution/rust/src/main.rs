@@ -17,7 +17,7 @@ use image::{
     imageops::{resize, FilterType},
     DynamicImage, ImageReader, ImageResult,
 };
-use nn::{conv::Conv2dConfig, loss::MseLoss, DropoutConfig, Sigmoid};
+use nn::{conv::Conv2dConfig, loss::MseLoss, DropoutConfig, PaddingConfig2d, Sigmoid};
 
 type fX = f32;
 
@@ -242,10 +242,15 @@ impl ModelConfig {
     /// Returns the initialized model.
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         Model {
-            deep: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [7, 7]).init(device),
-            deeper: Conv2dConfig::new([INTERMEDIATE_FEATURES, INTERMEDIATE_FEATURES], [5, 5])
+            deep: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [7, 7])
+                .with_padding(PaddingConfig2d::Same)
                 .init(device),
-            deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3]).init(device),
+            deeper: Conv2dConfig::new([INTERMEDIATE_FEATURES, INTERMEDIATE_FEATURES], [5, 5])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
             // pool: AdaptiveAvgPool2dConfig::new([8, 8]).init(),
             activation: Sigmoid::new(),
             // linear1: LinearConfig::new(16 * 8 * 8, self.hidden_size).init(device),
