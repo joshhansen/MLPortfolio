@@ -132,6 +132,7 @@ impl<B: Backend> ImageSRBatcher<B> {
         min_width: usize,
         min_height: usize,
         factor: usize,
+        normalize: bool,
     ) -> ImageResult<Option<Tensor<B, 3>>> {
         let img = Self::load_img(img_path)?;
         let w = img.width() as usize;
@@ -168,6 +169,8 @@ impl<B: Backend> ImageSRBatcher<B> {
         // 2:channels
         let img = img.swap_dims(0, 2);
 
+        let img = img * if normalize { 255.0 } else { 1.0 };
+
         Ok(Some(img))
     }
 }
@@ -183,6 +186,7 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
                     self.small_min_width,
                     self.small_min_height,
                     self.factor,
+                    true,
                 )
                 .unwrap()
             })
@@ -197,6 +201,7 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
                     self.large_min_width,
                     self.large_min_height,
                     1,
+                    false,
                 )
                 .unwrap()
             })
@@ -221,9 +226,13 @@ pub struct Model<B: Backend> {
     activation: Sigmoid,
 }
 impl<B: Backend> Model<B> {
+    /// Refine an already-upscaled image to look more realistic and remove jpeg artifacts
+    ///
     /// # Shapes
     /// - Small images (batch, width, height, channel)
     fn upscale(&self, small: Tensor<B, 4>) -> Tensor<B, 4> {
+        // the input is in [0, 1]
+
         // println!("Small shape: {:?}", small.shape());
         // println!("deep shape: {:?}", self.deep.weight.shape());
         let x = self.deep.forward(small);
@@ -242,7 +251,9 @@ impl<B: Backend> Model<B> {
 
         let x = self.deepest.forward(x);
         let x = self.dropout.forward(x);
-        self.activation.forward(x)
+
+        // the output is in [0, 255]
+        self.activation.forward(x) * 255.0
     }
 }
 
@@ -278,15 +289,21 @@ impl ModelConfig {
 pub struct ImageSRTrainingConfig {
     #[config(default = 100)]
     pub num_epochs: usize,
+
     #[config(default = 4)]
     pub batch_size: usize,
+
     #[config(default = 4)]
     pub num_workers: usize,
+
     #[config(default = 248949)]
     pub seed: u64,
+
     #[config(default = 1e-4)]
     pub lr: f64,
+
     pub model: ModelConfig,
+
     pub optimizer: AdamConfig,
 }
 
@@ -357,10 +374,17 @@ pub fn run<B: AutodiffBackend>(
 
             // Gradients for the current backward pass
             let grads = loss.backward();
+
+            println!("Got grads");
+
             // Gradients linked to each parameter of the model.
             let grads = GradientsParams::from_grads(grads, &model);
+            println!("Got individual grads");
+
             // Update the model using the optimizer.
             model = optim.step(config.lr, model, grads);
+
+            println!("Stepped");
         }
 
         // Get the model without autodiff.
