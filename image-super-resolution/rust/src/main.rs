@@ -25,7 +25,7 @@ const W_SMALL: usize = 700;
 const H_SMALL: usize = 700;
 const W_LARGE: usize = 1400;
 const H_LARGE: usize = 1400;
-const INTERMEDIATE_FEATURES: usize = 15;
+const INTERMEDIATE_FEATURES: usize = 16;
 
 #[derive(Parser)]
 #[command(version, about = "Image super-resolution trainer", long_about = None)]
@@ -131,6 +131,7 @@ impl<B: Backend> ImageSRBatcher<B> {
         dev: &B::Device,
         min_width: usize,
         min_height: usize,
+        factor: usize,
     ) -> ImageResult<Option<Tensor<B, 3>>> {
         let img = Self::load_img(img_path)?;
         let w = img.width() as usize;
@@ -140,8 +141,8 @@ impl<B: Backend> ImageSRBatcher<B> {
             return Ok(None);
         }
 
-        let new_w = w * self.factor;
-        let new_h = h * self.factor;
+        let new_w = w * factor;
+        let new_h = h * factor;
 
         // Pre-upscale using a standard algorithm
         let img = resize(&img, new_w as u32, new_h as u32, FilterType::Nearest);
@@ -155,13 +156,18 @@ impl<B: Backend> ImageSRBatcher<B> {
         // We know this because of the into_rgb32f() call which forces it to RGB
         let c = 3usize;
 
+        // The data layout appears to be (w, h, c), see ImageBuffer::pixel_indices_unchecked
         let img = flat_tensor.reshape([new_w, new_h, c]).slice([
-            Some((0i64, (min_width * self.factor) as i64)),
-            Some((0i64, (min_height * self.factor) as i64)),
+            Some((0i64, (min_width * factor) as i64)),
+            Some((0i64, (min_height * factor) as i64)),
             None,
         ]);
 
-        // The data layout appears to be (w, h, c), see ImageBuffer::pixel_indices_unchecked
+        // 0:width
+        // 1:height
+        // 2:channels
+        let img = img.swap_dims(0, 2);
+
         Ok(Some(img))
     }
 }
@@ -176,6 +182,7 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
                     &self.device,
                     self.small_min_width,
                     self.small_min_height,
+                    self.factor,
                 )
                 .unwrap()
             })
@@ -189,6 +196,7 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
                     &self.device,
                     self.large_min_width,
                     self.large_min_height,
+                    1,
                 )
                 .unwrap()
             })
@@ -216,15 +224,21 @@ impl<B: Backend> Model<B> {
     /// # Shapes
     /// - Small images (batch, width, height, channel)
     fn upscale(&self, small: Tensor<B, 4>) -> Tensor<B, 4> {
-        println!("Small shape: {:?}", small.shape());
-        println!("deep shape: {:?}", self.deep.weight.shape());
+        // println!("Small shape: {:?}", small.shape());
+        // println!("deep shape: {:?}", self.deep.weight.shape());
         let x = self.deep.forward(small);
         let x = self.dropout.forward(x);
         let x = self.activation.forward(x);
 
+        // println!("deeper shape: {:?}", self.deeper.weight.shape());
+        // println!("x shape: {:?}", x.shape());
+
         let x = self.deeper.forward(x);
         let x = self.dropout.forward(x);
         let x = self.activation.forward(x);
+
+        // println!("deepest shape: {:?}", self.deepest.weight.shape());
+        // println!("x shape: {:?}", x.shape());
 
         let x = self.deepest.forward(x);
         let x = self.dropout.forward(x);
@@ -264,7 +278,7 @@ impl ModelConfig {
 pub struct ImageSRTrainingConfig {
     #[config(default = 100)]
     pub num_epochs: usize,
-    #[config(default = 5)]
+    #[config(default = 4)]
     pub batch_size: usize,
     #[config(default = 4)]
     pub num_workers: usize,
@@ -326,9 +340,10 @@ pub fn run<B: AutodiffBackend>(
     for epoch in 1..config.num_epochs + 1 {
         // Implement our training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
-            println!("batch small shape: {:?}", batch.small.shape());
-            println!("batch large shape: {:?}", batch.large.shape());
+            // println!("batch small shape: {:?}", batch.small.shape());
+            // println!("batch large shape: {:?}", batch.large.shape());
             let pred = model.upscale(batch.small);
+            // println!("pred train shape: {:?}", pred.shape());
             let loss = MseLoss::new().forward(pred.clone(), batch.large.clone(), Reduction::Mean);
             // let accuracy = accuracy(pred, batch.large);
 
@@ -354,6 +369,7 @@ pub fn run<B: AutodiffBackend>(
         // Implement our validation loop.
         for (iteration, batch) in dataloader_test.iter().enumerate() {
             let pred = model_valid.upscale(batch.small);
+            // println!("pred valid shape: {:?}", pred.shape());
             let loss = MseLoss::new().forward(pred.clone(), batch.large.clone(), Reduction::Mean);
 
             println!(
