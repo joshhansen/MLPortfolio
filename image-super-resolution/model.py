@@ -7,13 +7,14 @@ import jax
 import jax.numpy as jnp
 import optax
 
-DEEP = 3
+# DEEP = 3
 
 INTERMEDIATE_FEATS = 16
 
 
 class Model(nnx.Module):
-    def __init__(self, rngs=nnx.Rngs):
+    def __init__(self, rngs:nnx.Rngs, factor: int):
+        self._factor = factor
         # self.upscale_rgb = nnx.ConvTranspose(
         #     in_features=3,
         #     out_features=3,
@@ -72,8 +73,8 @@ class Model(nnx.Module):
         # )
 
     def __call__(self, x: jax.Array):
-        new_shape = (x.shape[0], x.shape[1] * 2,
-                     x.shape[2] * 2, INTERMEDIATE_FEATS)
+        new_shape = (x.shape[0], x.shape[1] * self._factor,
+                     x.shape[2] * self._factor, INTERMEDIATE_FEATS)
         upscaled = jax.image.resize(x, new_shape, "nearest")
 
         out = self.deep(upscaled)
