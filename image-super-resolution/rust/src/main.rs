@@ -102,8 +102,8 @@ struct ImageSRItem {
 
 #[derive(Debug, Clone)]
 struct ImageSRBatch<B: Backend> {
-    pub small: Tensor<B, 4>,
-    pub large: Tensor<B, 4>,
+    pub small: Option<Tensor<B, 4>>,
+    pub large: Option<Tensor<B, 4>>,
 }
 
 #[derive(Clone)]
@@ -139,6 +139,16 @@ impl<B: Backend> ImageSRBatcher<B> {
         let h = img.height() as usize;
 
         if w < min_width || h < min_height {
+            eprintln!(
+                "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
+                img_path.display(),
+                w,
+                h,
+                min_width,
+                min_height,
+                factor,
+                normalize
+            );
             return Ok(None);
         }
 
@@ -177,9 +187,12 @@ impl<B: Backend> ImageSRBatcher<B> {
 
 impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
     fn batch(&self, items: Vec<ImageSRItem>) -> ImageSRBatch<B> {
-        let small: Vec<Tensor<B, 3>> = items
+        let mut small: Vec<Tensor<B, 3>> = Vec::with_capacity(items.len());
+        let mut large: Vec<Tensor<B, 3>> = Vec::with_capacity(items.len());
+
+        let _small: Vec<Option<Tensor<B, 3>>> = items
             .iter()
-            .filter_map(|p| {
+            .map(|p| {
                 self.load_cropped_img_as_tensor(
                     &p.small_path,
                     &self.device,
@@ -192,9 +205,9 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
             })
             .collect();
 
-        let large: Vec<Tensor<B, 3>> = items
+        let _large: Vec<Option<Tensor<B, 3>>> = items
             .into_iter()
-            .filter_map(|p| {
+            .map(|p| {
                 self.load_cropped_img_as_tensor(
                     &p.large_path,
                     &self.device,
@@ -207,8 +220,40 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
             })
             .collect();
 
-        let small = Tensor::stack::<4>(small, 0);
-        let large = Tensor::stack::<4>(large, 0);
+        debug_assert_eq!(_small.len(), _large.len());
+
+        for (small_img, large_img) in std::iter::zip(_small, _large) {
+            if let Some(small_img) = small_img {
+                if let Some(large_img) = large_img {
+                    small.push(small_img);
+                    large.push(large_img);
+                } else {
+                    eprintln!("small ok, large bad");
+                }
+            } else if large_img.is_some() {
+                eprintln!("small bad, large ok");
+            } else {
+                // both bad, not surprising
+            }
+        }
+
+        let small = if small.is_empty() {
+            None
+        } else {
+            Some(Tensor::stack::<4>(small, 0))
+        };
+        let large = if large.is_empty() {
+            None
+        } else {
+            Some(Tensor::stack::<4>(large, 0))
+        };
+
+        if let Some(small) = small.as_ref() {
+            if let Some(large) = large.as_ref() {
+                assert_eq!(small.shape().dims[0], large.shape().dims[0]);
+                assert_eq!(small.shape().dims[1], large.shape().dims[1]);
+            }
+        }
 
         ImageSRBatch { small, large }
     }
@@ -357,34 +402,42 @@ pub fn run<B: AutodiffBackend>(
     for epoch in 1..config.num_epochs + 1 {
         // Implement our training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
-            // println!("batch small shape: {:?}", batch.small.shape());
-            // println!("batch large shape: {:?}", batch.large.shape());
-            let pred = model.upscale(batch.small);
-            // println!("pred train shape: {:?}", pred.shape());
-            let loss = MseLoss::new().forward(pred.clone(), batch.large.clone(), Reduction::Mean);
-            // let accuracy = accuracy(pred, batch.large);
+            if let Some(small) = batch.small {
+                if let Some(large) = batch.large {
+                    // println!("batch small shape: {:?}", batch.small.shape());
+                    // println!("batch large shape: {:?}", batch.large.shape());
+                    let pred = model.upscale(small);
+                    // println!("pred train shape: {:?}", pred.shape());
+                    let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
+                    // let accuracy = accuracy(pred, batch.large);
 
-            println!(
-                "[Train - Epoch {} - Iteration {}] Loss {:.3}",
-                epoch,
-                iteration,
-                loss.clone().into_scalar(),
-                // accuracy,
-            );
+                    println!(
+                        "[Train - Epoch {} - Iteration {}] Loss {:.3}",
+                        epoch,
+                        iteration,
+                        loss.clone().into_scalar(),
+                        // accuracy,
+                    );
 
-            // Gradients for the current backward pass
-            let grads = loss.backward();
+                    // Gradients for the current backward pass
+                    let grads = loss.backward();
 
-            println!("Got grads");
+                    println!("Got grads");
 
-            // Gradients linked to each parameter of the model.
-            let grads = GradientsParams::from_grads(grads, &model);
-            println!("Got individual grads");
+                    // Gradients linked to each parameter of the model.
+                    let grads = GradientsParams::from_grads(grads, &model);
+                    println!("Got individual grads");
 
-            // Update the model using the optimizer.
-            model = optim.step(config.lr, model, grads);
+                    // Update the model using the optimizer.
+                    model = optim.step(config.lr, model, grads);
 
-            println!("Stepped");
+                    println!("Stepped");
+                } else {
+                    eprintln!("large was None");
+                }
+            } else {
+                eprintln!("small was None");
+            }
         }
 
         // Get the model without autodiff.
@@ -392,16 +445,24 @@ pub fn run<B: AutodiffBackend>(
 
         // Implement our validation loop.
         for (iteration, batch) in dataloader_test.iter().enumerate() {
-            let pred = model_valid.upscale(batch.small);
-            // println!("pred valid shape: {:?}", pred.shape());
-            let loss = MseLoss::new().forward(pred.clone(), batch.large.clone(), Reduction::Mean);
+            if let Some(small) = batch.small {
+                if let Some(large) = batch.large {
+                    let pred = model_valid.upscale(small);
+                    // println!("pred valid shape: {:?}", pred.shape());
+                    let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
 
-            println!(
-                "[Valid - Epoch {} - Iteration {}] Loss {}",
-                epoch,
-                iteration,
-                loss.clone().into_scalar(),
-            );
+                    println!(
+                        "[Valid - Epoch {} - Iteration {}] Loss {}",
+                        epoch,
+                        iteration,
+                        loss.clone().into_scalar(),
+                    );
+                } else {
+                    eprintln!("valid large was None");
+                }
+            } else {
+                eprintln!("valid small was None");
+            }
         }
     }
 }
