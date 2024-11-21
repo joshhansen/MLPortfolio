@@ -1,6 +1,7 @@
 use std::{
     io::{stdout, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use burn::{
@@ -64,9 +65,16 @@ struct ImageSRDataset {
     small_dir: PathBuf,
     large_dir: PathBuf,
     count: usize,
+    // number of partitions to break the dataset into, in order to shard loading
+    // set to 1 if not partitioning
+    partitions: usize,
+
+    // the partition to select
+    // 0-indexed
+    partition: usize,
 }
 impl ImageSRDataset {
-    fn load(small_dir: &Path, large_dir: &Path) -> Self {
+    fn load(small_dir: &Path, large_dir: &Path, partitions: usize, partition: usize) -> Self {
         let small_count = std::fs::read_dir(small_dir).unwrap().count();
         let large_count = std::fs::read_dir(large_dir).unwrap().count();
 
@@ -76,12 +84,19 @@ impl ImageSRDataset {
             small_dir: small_dir.to_path_buf(),
             large_dir: large_dir.to_path_buf(),
             count: small_count,
+            partitions,
+            partition,
         }
     }
 }
 
 impl Dataset<ImageSRItem> for ImageSRDataset {
     fn get(&self, index: usize) -> Option<ImageSRItem> {
+        let p = index & self.partitions;
+        if p != self.partition {
+            return None;
+        }
+
         let mut small_path = self.small_dir.clone();
         small_path.push(index.to_string());
 
@@ -273,6 +288,15 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
             }
         }
 
+        assert_eq!(
+            small.as_ref().map(|s| s.shape().dims[0]),
+            large.as_ref().map(|l| l.shape().dims[0])
+        );
+        assert_eq!(
+            small.as_ref().map(|s| s.shape().dims[1]),
+            large.as_ref().map(|l| l.shape().dims[1])
+        );
+
         ImageSRBatch { small, large }
     }
 }
@@ -407,13 +431,13 @@ pub fn run<B: AutodiffBackend>(
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(ImageSRDataset::load(train_small_dir, train_large_dir));
+        .build(ImageSRDataset::load(train_small_dir, train_large_dir, 1, 0));
 
     let dataloader_test = DataLoaderBuilder::new(valid_batcher)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(ImageSRDataset::load(valid_small_dir, valid_large_dir));
+        .build(ImageSRDataset::load(valid_small_dir, valid_large_dir, 1, 0));
 
     let recorder = NamedMpkGzFileRecorder::<FullPrecisionSettings>::new();
 
@@ -497,6 +521,144 @@ pub fn run<B: AutodiffBackend>(
 
         let mean_valid_loss = total_valid_loss / valid_batches as f64;
         println!("Mean validation loss: {}", mean_valid_loss);
+    }
+}
+
+use std::sync::mpsc::channel;
+use std::sync::RwLock;
+use std::thread;
+fn run_multi<B: AutodiffBackend>(
+    devices: Vec<B::Device>,
+    train_small_dir: &Path,
+    train_large_dir: &Path,
+    valid_small_dir: &Path,
+    valid_large_dir: &Path,
+    factor: usize,
+) {
+    let config_model = ModelConfig { dropout: 0.2 };
+    let config_optimizer = AdamConfig::new();
+    let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
+
+    B::seed(config.seed);
+
+    let x = Arc::new(RwLock::new(String::new()));
+    let (tx, rx) = channel();
+    for gpu in 0..devices.len() {
+        let tx = tx.clone();
+        let x = Arc::clone(&x);
+        let devices = devices.clone();
+        let config = config.clone();
+        let train_small_dir = train_small_dir.to_path_buf();
+        let train_large_dir = train_large_dir.to_path_buf();
+        let valid_small_dir = valid_small_dir.to_path_buf();
+        let valid_large_dir = valid_large_dir.to_path_buf();
+        thread::spawn(move || loop {
+            tx.send(format!("{}{}", x.read().unwrap(), gpu)).unwrap();
+
+            let device = &devices[gpu];
+
+            let mut optim = config.optimizer.init::<B, Model<B>>();
+            let mut model: Model<B> = config.model.init(device);
+            let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
+                device: device.clone(),
+                small_min_width: W_SMALL,
+                small_min_height: H_SMALL,
+                large_min_width: W_LARGE,
+                large_min_height: H_LARGE,
+                factor,
+            };
+            let valid_batcher: ImageSRBatcher<B::InnerBackend> = ImageSRBatcher {
+                device: device.clone(),
+                small_min_width: W_SMALL,
+                small_min_height: H_SMALL,
+                large_min_width: W_LARGE,
+                large_min_height: H_LARGE,
+                factor,
+            };
+
+            let dataloader_train = DataLoaderBuilder::new(train_batcher)
+                .batch_size(config.batch_size)
+                .shuffle(config.seed)
+                .num_workers(config.num_workers)
+                .build(ImageSRDataset::load(
+                    &train_small_dir,
+                    &train_large_dir,
+                    devices.len(),
+                    gpu,
+                ));
+
+            let dataloader_test = DataLoaderBuilder::new(valid_batcher)
+                .batch_size(config.batch_size)
+                .shuffle(config.seed)
+                .num_workers(config.num_workers)
+                .build(ImageSRDataset::load(
+                    &valid_small_dir,
+                    &valid_large_dir,
+                    devices.len(),
+                    gpu,
+                ));
+
+            // Iterate over our training and validation loop for X epochs.
+            for epoch in 1..config.num_epochs + 1 {
+                // Implement our training loop.
+                for (iteration, batch) in dataloader_train.iter().enumerate() {
+                    if let Some(small) = batch.small {
+                        if let Some(large) = batch.large {
+                            let pred = model.upscale(small, true);
+                            let loss = MseLoss::new().forward(pred, large, Reduction::Mean);
+
+                            println!(
+                                "[Train - Epoch {} - Iteration {}] Loss {:.3}",
+                                epoch,
+                                iteration,
+                                loss.clone().into_scalar(),
+                                // accuracy,
+                            );
+
+                            // Gradients for the current backward pass
+                            let grads = loss.backward();
+
+                            println!("Got grads");
+
+                            // Gradients linked to each parameter of the model.
+                            let grads = GradientsParams::from_grads(grads, &model);
+                            println!("Got individual grads");
+
+                            // Update the model using the optimizer.
+                            model = optim.step(config.lr, model, grads);
+
+                            println!("Stepped");
+                        }
+                    }
+                }
+
+                // Get the model without autodiff.
+                let model_valid = model.valid();
+
+                // Implement our validation loop.
+                for (iteration, batch) in dataloader_test.iter().enumerate() {
+                    if let Some(small) = batch.small {
+                        if let Some(large) = batch.large {
+                            let pred = model_valid.upscale(small, false);
+                            let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
+
+                            println!(
+                                "[Valid - Epoch {} - Iteration {}] Loss {}",
+                                epoch,
+                                iteration,
+                                loss.clone().into_scalar(),
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    for _ in 0..10 {
+        let j = rx.recv().unwrap();
+
+        x.write().unwrap().push_str(j.as_str());
     }
 }
 
