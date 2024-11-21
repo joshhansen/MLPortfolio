@@ -15,7 +15,7 @@ use burn::{
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     record::{FullPrecisionSettings, NamedMpkGzFileRecorder},
-    tensor::{backend::AutodiffBackend, cast::ToElement},
+    tensor::{backend::AutodiffBackend, cast::ToElement, BasicOps, Numeric, TensorKind},
 };
 use clap::{Parser, Subcommand};
 use image::{
@@ -524,6 +524,29 @@ pub fn run<B: AutodiffBackend>(
     }
 }
 
+fn mean_tensor<B: Backend, const D: usize, K: TensorKind<B>+BasicOps<B>+Numeric<B>>(tensors: Vec<Tensor<B, D, K>>, dev: &B::Device) -> Tensor<B, D, K> {
+    let mut sum = Tensor::zeros(tensors[0].shape(), dev); 
+
+    let l = tensors.len() as u64;
+
+    for t in tensors {
+        sum = sum + t;
+    }
+
+    sum / l
+}
+
+/// Returns the first conv, with updated weights and bias, located on `dev`
+fn mean_conv2d<B: Backend>(convs: Vec<Conv2d<B>>, dev: &B::Device) -> Conv2d<B> {
+    let mut c = convs[0].clone().to_device(dev);
+    let bias_sensors: Vec<Tensor<B, 1>> = convs.iter().map(|c| c.bias.unwrap().into_value()).collect();
+    let weight_tensors: Vec<Tensor<B, 4>> = convs.into_iter().map(|c| c.weight.into_value()).collect();
+    *c.weight = mean_tensor(weight_tensors, dev);
+    // *(c.bias.as_mut().unwrap()) = mean_tensor(bias_tensors, dev);
+
+    c
+}
+
 use std::sync::mpsc::channel;
 use std::sync::RwLock;
 use std::thread;
@@ -554,8 +577,6 @@ fn run_multi(
         let valid_small_dir = valid_small_dir.to_path_buf();
         let valid_large_dir = valid_large_dir.to_path_buf();
         thread::spawn(move || loop {
-            tx.send(format!("{}{}", x.read().unwrap(), gpu)).unwrap();
-
             let device = &devices[gpu];
 
             let mut optim = config.optimizer.init::<B, Model<B>>();
@@ -629,6 +650,8 @@ fn run_multi(
                             // Update the model using the optimizer.
                             model = optim.step(config.lr, model, grads);
 
+                            tx.send((gpu, model.clone()));
+
                             println!("Stepped");
                         }
                     }
@@ -657,10 +680,16 @@ fn run_multi(
         });
     }
 
-    for _ in 0..10 {
-        let j = rx.recv().unwrap();
+    let control_dev = WgpuDevice::Cpu;
+    let mut models = vec![None; devices.len()];
+    loop {
+        let (gpu, gpu_model) = rx.recv().unwrap();
+        models[gpu] = Some(gpu_model.to_device(&control_dev));
 
-        x.write().unwrap().push_str(j.as_str());
+        let mean_deep = 
+
+        let mut mean_model: Model<B> = config.model.init(&control_dev);
+
     }
 }
 
