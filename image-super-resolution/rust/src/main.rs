@@ -5,7 +5,7 @@ use std::{
 };
 
 use burn::{
-    backend::{Autodiff, Wgpu},
+    backend::{wgpu::WgpuDevice, Autodiff, Wgpu},
     data::{
         dataloader::{batcher::Batcher, DataLoaderBuilder},
         dataset::Dataset,
@@ -527,14 +527,15 @@ pub fn run<B: AutodiffBackend>(
 use std::sync::mpsc::channel;
 use std::sync::RwLock;
 use std::thread;
-fn run_multi<B: AutodiffBackend>(
-    devices: Vec<B::Device>,
+fn run_multi(
+    devices: Vec<WgpuDevice>,
     train_small_dir: &Path,
     train_large_dir: &Path,
     valid_small_dir: &Path,
     valid_large_dir: &Path,
     factor: usize,
 ) {
+    type B = Autodiff<Wgpu>;
     let config_model = ModelConfig { dropout: 0.2 };
     let config_optimizer = AdamConfig::new();
     let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
@@ -567,14 +568,15 @@ fn run_multi<B: AutodiffBackend>(
                 large_min_height: H_LARGE,
                 factor,
             };
-            let valid_batcher: ImageSRBatcher<B::InnerBackend> = ImageSRBatcher {
-                device: device.clone(),
-                small_min_width: W_SMALL,
-                small_min_height: H_SMALL,
-                large_min_width: W_LARGE,
-                large_min_height: H_LARGE,
-                factor,
-            };
+            let valid_batcher: ImageSRBatcher<<B as AutodiffBackend>::InnerBackend> =
+                ImageSRBatcher {
+                    device: device.clone(),
+                    small_min_width: W_SMALL,
+                    small_min_height: H_SMALL,
+                    large_min_width: W_LARGE,
+                    large_min_height: H_LARGE,
+                    factor,
+                };
 
             let dataloader_train = DataLoaderBuilder::new(train_batcher)
                 .batch_size(config.batch_size)
