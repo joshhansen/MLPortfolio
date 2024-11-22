@@ -193,30 +193,44 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
         let _small: Vec<Option<Tensor<B, 3>>> = items
             .iter()
             .map(|p| {
-                self.load_cropped_img_as_tensor(
+                let r = self.load_cropped_img_as_tensor(
                     &p.small_path,
                     &self.device,
                     self.small_min_width,
                     self.small_min_height,
                     self.factor,
                     true,
-                )
-                .unwrap()
+                );
+
+                match r {
+                    Err(e) => {
+                        eprintln!("Image load error: {}", e);
+                        None
+                    }
+                    Ok(t) => t,
+                }
             })
             .collect();
 
         let _large: Vec<Option<Tensor<B, 3>>> = items
             .into_iter()
             .map(|p| {
-                self.load_cropped_img_as_tensor(
+                let r = self.load_cropped_img_as_tensor(
                     &p.large_path,
                     &self.device,
                     self.large_min_width,
                     self.large_min_height,
                     1,
                     false,
-                )
-                .unwrap()
+                );
+
+                match r {
+                    Err(e) => {
+                        eprintln!("Image load error: {}", e);
+                        None
+                    }
+                    Ok(t) => t,
+                }
             })
             .collect();
 
