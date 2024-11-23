@@ -10,7 +10,7 @@ use burn::{
         dataloader::{batcher::Batcher, DataLoaderBuilder},
         dataset::Dataset,
     },
-    module::AutodiffModule,
+    module::{AutodiffModule, Param},
     nn::{conv::Conv2d, loss::Reduction, Dropout},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
@@ -524,8 +524,11 @@ pub fn run<B: AutodiffBackend>(
     }
 }
 
-fn mean_tensor<B: Backend, const D: usize, K: TensorKind<B>+BasicOps<B>+Numeric<B>>(tensors: Vec<Tensor<B, D, K>>, dev: &B::Device) -> Tensor<B, D, K> {
-    let mut sum = Tensor::zeros(tensors[0].shape(), dev); 
+fn mean_tensor<B: Backend, const D: usize, K: TensorKind<B> + BasicOps<B> + Numeric<B>>(
+    tensors: Vec<Tensor<B, D, K>>,
+    dev: &B::Device,
+) -> Tensor<B, D, K> {
+    let mut sum = Tensor::zeros(tensors[0].shape(), dev);
 
     let l = tensors.len() as u64;
 
@@ -539,12 +542,82 @@ fn mean_tensor<B: Backend, const D: usize, K: TensorKind<B>+BasicOps<B>+Numeric<
 /// Returns the first conv, with updated weights and bias, located on `dev`
 fn mean_conv2d<B: Backend>(convs: Vec<Conv2d<B>>, dev: &B::Device) -> Conv2d<B> {
     let mut c = convs[0].clone().to_device(dev);
-    let bias_sensors: Vec<Tensor<B, 1>> = convs.iter().map(|c| c.bias.unwrap().into_value()).collect();
-    let weight_tensors: Vec<Tensor<B, 4>> = convs.into_iter().map(|c| c.weight.into_value()).collect();
-    *c.weight = mean_tensor(weight_tensors, dev);
-    // *(c.bias.as_mut().unwrap()) = mean_tensor(bias_tensors, dev);
+    let bias_tensors: Vec<Tensor<B, 1>> = convs
+        .iter()
+        .map(|c| c.bias.clone().unwrap().into_value())
+        .collect();
+    let weight_tensors: Vec<Tensor<B, 4>> =
+        convs.into_iter().map(|c| c.weight.into_value()).collect();
+    c.weight = Param::from_tensor(mean_tensor(weight_tensors, dev));
+    c.bias = Some(Param::from_tensor(mean_tensor(bias_tensors, dev)));
 
     c
+}
+
+fn mean_conv2d_from_parts<B: Backend>(
+    mut c: Conv2d<B>,
+    parts: Vec<Conv2dTensors<B>>,
+    dev: &B::Device,
+) -> Conv2d<B> {
+    let mut weight = Vec::with_capacity(parts.len());
+    let mut bias = Vec::with_capacity(parts.len());
+
+    for p in parts {
+        weight.push(p.weight.into());
+        bias.push(p.bias.unwrap().into());
+    }
+
+    c.weight = Param::from_tensor(mean_tensor(weight, dev));
+    c.bias = Some(Param::from_tensor(mean_tensor(bias, dev)));
+
+    c
+}
+
+#[derive(Clone)]
+struct Conv2dTensors<B: Backend> {
+    weight: Tensor<B, 4>,
+    bias: Option<Tensor<B, 1>>,
+}
+impl<B: Backend> Conv2dTensors<B> {
+    fn to_device(self, dev: &B::Device) -> Self {
+        Self {
+            weight: self.weight.to_device(dev),
+            bias: self.bias.map(|b| b.to_device(dev)),
+        }
+    }
+}
+impl<B: Backend> From<Conv2d<B>> for Conv2dTensors<B> {
+    fn from(m: Conv2d<B>) -> Self {
+        Self {
+            weight: m.weight.into_value(),
+            bias: m.bias.map(|b| b.into_value()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ModelTensors<B: Backend> {
+    deep: Conv2dTensors<B>,
+    deeper: Conv2dTensors<B>,
+    deepest: Conv2dTensors<B>,
+}
+impl<B: Backend> ModelTensors<B> {
+    fn to_device(self, dev: &B::Device) -> Self {
+        Self {
+            deep: self.deep.to_device(dev),
+            deeper: self.deeper.to_device(dev),
+            deepest: self.deepest.to_device(dev),
+        }
+    }
+}
+impl<B: Backend> From<Model<B>> for ModelTensors<B> {
+    fn from(m: Model<B>) -> Self {
+        Self {
+            deep: Conv2dTensors::from(m.deep),
+            deeper: Conv2dTensors::from(m.deeper),
+            deepest: Conv2dTensors::from(m.deepest),
+        }
+    }
 }
 
 use std::sync::mpsc::channel;
@@ -565,11 +638,13 @@ fn run_multi(
 
     B::seed(config.seed);
 
-    let x = Arc::new(RwLock::new(String::new()));
+    let control_dev = WgpuDevice::Cpu;
+    let shared_deep: Arc<RwLock<ModelTensors<B>>> = Arc::new(RwLock::new(ModelTensors::from(
+        config.model.init(&control_dev),
+    )));
     let (tx, rx) = channel();
     for gpu in 0..devices.len() {
         let tx = tx.clone();
-        let x = Arc::clone(&x);
         let devices = devices.clone();
         let config = config.clone();
         let train_small_dir = train_small_dir.to_path_buf();
@@ -650,7 +725,7 @@ fn run_multi(
                             // Update the model using the optimizer.
                             model = optim.step(config.lr, model, grads);
 
-                            tx.send((gpu, model.clone()));
+                            tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
 
                             println!("Stepped");
                         }
@@ -680,16 +755,36 @@ fn run_multi(
         });
     }
 
-    let control_dev = WgpuDevice::Cpu;
     let mut models = vec![None; devices.len()];
     loop {
         let (gpu, gpu_model) = rx.recv().unwrap();
         models[gpu] = Some(gpu_model.to_device(&control_dev));
 
-        let mean_deep = 
-
         let mut mean_model: Model<B> = config.model.init(&control_dev);
-
+        mean_model.deep = mean_conv2d_from_parts(
+            mean_model.deep,
+            models
+                .iter()
+                .map(|m| m.as_ref().unwrap().deep.clone())
+                .collect(),
+            &control_dev,
+        );
+        mean_model.deeper = mean_conv2d_from_parts(
+            mean_model.deeper,
+            models
+                .iter()
+                .map(|m| m.as_ref().unwrap().deeper.clone())
+                .collect(),
+            &control_dev,
+        );
+        mean_model.deepest = mean_conv2d_from_parts(
+            mean_model.deepest,
+            models
+                .iter()
+                .map(|m| m.as_ref().unwrap().deepest.clone())
+                .collect(),
+            &control_dev,
+        );
     }
 }
 
