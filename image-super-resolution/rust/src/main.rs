@@ -651,11 +651,11 @@ fn run_multi(
         let train_large_dir = train_large_dir.to_path_buf();
         let valid_small_dir = valid_small_dir.to_path_buf();
         let valid_large_dir = valid_large_dir.to_path_buf();
-        thread::spawn(move || loop {
-            let device = &devices[gpu];
 
-            let mut optim = config.optimizer.init::<B, Model<B>>();
-            let mut model: Model<B> = config.model.init(device);
+        let device = devices[gpu].clone();
+        let mut optim = config.optimizer.init::<B, Model<B>>();
+        let mut model: Model<B> = config.model.init(&device);
+        thread::spawn(move || loop {
             let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
                 device: device.clone(),
                 small_min_width: W_SMALL,
