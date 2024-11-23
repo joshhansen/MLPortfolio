@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::{stdout, Write},
+    path::{Path, PathBuf},
+};
 
 use burn::{
     backend::{Autodiff, Wgpu},
@@ -10,7 +13,8 @@ use burn::{
     nn::{conv::Conv2d, loss::Reduction, Dropout},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::backend::AutodiffBackend,
+    record::{FullPrecisionSettings, NamedMpkGzFileRecorder},
+    tensor::{backend::AutodiffBackend, cast::ToElement},
 };
 use clap::{Parser, Subcommand};
 use image::{
@@ -139,16 +143,16 @@ impl<B: Backend> ImageSRBatcher<B> {
         let h = img.height() as usize;
 
         if w < min_width || h < min_height {
-            eprintln!(
-                "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
-                img_path.display(),
-                w,
-                h,
-                min_width,
-                min_height,
-                factor,
-                normalize
-            );
+            // eprintln!(
+            //     "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
+            //     img_path.display(),
+            //     w,
+            //     h,
+            //     min_width,
+            //     min_height,
+            //     factor,
+            //     normalize
+            // );
             return Ok(None);
         }
 
@@ -289,27 +293,25 @@ impl<B: Backend> Model<B> {
     ///
     /// # Shapes
     /// - Small images (batch, width, height, channel)
-    fn upscale(&self, small: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn upscale(&self, small: Tensor<B, 4>, training: bool) -> Tensor<B, 4> {
         // the input is in [0, 1]
 
-        // println!("Small shape: {:?}", small.shape());
-        // println!("deep shape: {:?}", self.deep.weight.shape());
-        let x = self.deep.forward(small);
-        let x = self.dropout.forward(x);
+        let mut x = self.deep.forward(small);
+        if training {
+            x = self.dropout.forward(x);
+        }
         let x = self.activation.forward(x);
 
-        // println!("deeper shape: {:?}", self.deeper.weight.shape());
-        // println!("x shape: {:?}", x.shape());
-
-        let x = self.deeper.forward(x);
-        let x = self.dropout.forward(x);
+        let mut x = self.deeper.forward(x);
+        if training {
+            x = self.dropout.forward(x);
+        }
         let x = self.activation.forward(x);
 
-        // println!("deepest shape: {:?}", self.deepest.weight.shape());
-        // println!("x shape: {:?}", x.shape());
-
-        let x = self.deepest.forward(x);
-        let x = self.dropout.forward(x);
+        let mut x = self.deepest.forward(x);
+        if training {
+            x = self.dropout.forward(x);
+        }
 
         // the output is in [0, 255]
         self.activation.forward(x) * 255.0
@@ -318,7 +320,7 @@ impl<B: Backend> Model<B> {
 
 #[derive(Config, Debug)]
 pub struct ModelConfig {
-    #[config(default = "0.5")]
+    #[config(default = "0.1")]
     dropout: f64,
 }
 
@@ -358,7 +360,7 @@ pub struct ImageSRTrainingConfig {
     #[config(default = 248949)]
     pub seed: u64,
 
-    #[config(default = 1e-4)]
+    #[config(default = 1e-5)]
     pub lr: f64,
 
     pub model: ModelConfig,
@@ -372,6 +374,7 @@ pub fn run<B: AutodiffBackend>(
     train_large_dir: &Path,
     valid_small_dir: &Path,
     valid_large_dir: &Path,
+    output_dir: &Path,
     factor: usize,
 ) {
     let config_model = ModelConfig { dropout: 0.2 };
@@ -412,40 +415,36 @@ pub fn run<B: AutodiffBackend>(
         .num_workers(config.num_workers)
         .build(ImageSRDataset::load(valid_small_dir, valid_large_dir));
 
+    let recorder = NamedMpkGzFileRecorder::<FullPrecisionSettings>::new();
+
     // Iterate over our training and validation loop for X epochs.
     for epoch in 1..config.num_epochs + 1 {
         // Implement our training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             if let Some(small) = batch.small {
                 if let Some(large) = batch.large {
-                    // println!("batch small shape: {:?}", batch.small.shape());
-                    // println!("batch large shape: {:?}", batch.large.shape());
-                    let pred = model.upscale(small);
-                    // println!("pred train shape: {:?}", pred.shape());
-                    let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
-                    // let accuracy = accuracy(pred, batch.large);
+                    let pred = model.upscale(small, true);
 
-                    println!(
-                        "[Train - Epoch {} - Iteration {}] Loss {:.3}",
+                    assert_eq!(pred.shape(), large.shape());
+
+                    let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
+
+                    print!(
+                        "\r[Train - Epoch {} - Iteration {}] Loss {:.3}          ",
                         epoch,
                         iteration,
                         loss.clone().into_scalar(),
-                        // accuracy,
                     );
+                    stdout().flush().unwrap();
 
                     // Gradients for the current backward pass
                     let grads = loss.backward();
 
-                    println!("Got grads");
-
                     // Gradients linked to each parameter of the model.
                     let grads = GradientsParams::from_grads(grads, &model);
-                    println!("Got individual grads");
 
                     // Update the model using the optimizer.
                     model = optim.step(config.lr, model, grads);
-
-                    println!("Stepped");
                 } else {
                     eprintln!("large was None");
                 }
@@ -454,6 +453,20 @@ pub fn run<B: AutodiffBackend>(
             }
         }
 
+        println!();
+
+        let model_path = {
+            let mut p = output_dir.to_path_buf();
+            p.push(epoch.to_string());
+            p
+        };
+        model
+            .clone()
+            .save_file(model_path, &recorder)
+            .expect("Should be able to save the model");
+
+        let mut total_valid_loss = 0.0f64;
+        let mut valid_batches = 0usize;
         // Get the model without autodiff.
         let model_valid = model.valid();
 
@@ -461,16 +474,18 @@ pub fn run<B: AutodiffBackend>(
         for (iteration, batch) in dataloader_test.iter().enumerate() {
             if let Some(small) = batch.small {
                 if let Some(large) = batch.large {
-                    let pred = model_valid.upscale(small);
-                    // println!("pred valid shape: {:?}", pred.shape());
+                    let pred = model_valid.upscale(small, false);
                     let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
+                    let loss = loss.into_scalar();
 
-                    println!(
-                        "[Valid - Epoch {} - Iteration {}] Loss {}",
-                        epoch,
-                        iteration,
-                        loss.clone().into_scalar(),
+                    total_valid_loss += loss.to_f64();
+                    valid_batches += 1;
+
+                    print!(
+                        "\r[Valid - Epoch {} - Iteration {}] Loss {}",
+                        epoch, iteration, loss,
                     );
+                    stdout().flush().unwrap();
                 } else {
                     eprintln!("valid large was None");
                 }
@@ -478,6 +493,10 @@ pub fn run<B: AutodiffBackend>(
                 eprintln!("valid small was None");
             }
         }
+        println!();
+
+        let mean_valid_loss = total_valid_loss / valid_batches as f64;
+        println!("Mean validation loss: {}", mean_valid_loss);
     }
 }
 
@@ -505,6 +524,7 @@ fn main() -> Result<(), walkdir::Error> {
                 train_large_dir,
                 valid_small_dir,
                 valid_large_dir,
+                output_dir,
                 *factor,
             );
         }
