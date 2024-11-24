@@ -1,36 +1,43 @@
+import math
 from pathlib import Path
 import shutil
 
 from flax import nnx
+from flax.typing import Dtype
+from jax.sharding import PartitionSpec
 from flax.training.train_state import TrainState
 import jax
+import jax.nn as jnn
 import jax.numpy as jnp
 import optax
 
-# DEEP = 3
 
-INTERMEDIATE_FEATS = 16
+INTERMEDIATE_FEATS=16
 
+def assert_num(x):
+    assert(not math.isnan(x))
+    assert(not math.isinf(x))
+
+def assert_arr_num(x: jax.Array):
+    assert(not jnp.isnan(x).any())
+    assert(not jnp.isinf(x).any())
 
 class Model(nnx.Module):
-    def __init__(self, rngs:nnx.Rngs, factor: int):
-        self._factor = factor
-        # self.upscale_rgb = nnx.ConvTranspose(
-        #     in_features=3,
-        #     out_features=3,
-        #     kernel_size=(1, 3, 3),
-        #     # kernel_dilation=2,
-        #     # padding=0,
-        #     padding='SAME',
-        #     strides=(1, 2, 2),
-        #     rngs=rngs
-        # )
+    def __init__(self, rngs:nnx.Rngs, param_dtype: Dtype = 'float64', use_bias = False):
+        init_fn = nnx.initializers.lecun_normal()
+        # init_fn = nnx.initializers.constant(0.5)
+
+        # Distribute the model to all devices
+        partitioning = (None,)
         self.deep = nnx.Conv(
-            in_features=INTERMEDIATE_FEATS,
+            in_features=3,
             out_features=INTERMEDIATE_FEATS,
             kernel_size=(7, 7),
             padding='SAME',
             rngs=rngs,
+            use_bias=use_bias,
+            param_dtype=param_dtype,
+            kernel_init=nnx.with_partitioning(init_fn, partitioning),
         )
         self.deeper = nnx.Conv(
             in_features=INTERMEDIATE_FEATS,
@@ -38,6 +45,9 @@ class Model(nnx.Module):
             kernel_size=(5, 5),
             padding='SAME',
             rngs=rngs,
+            param_dtype=param_dtype,
+            use_bias=use_bias,
+            kernel_init=nnx.with_partitioning(init_fn, partitioning),
         )
         self.deepest = nnx.Conv(
             in_features=INTERMEDIATE_FEATS,
@@ -45,6 +55,9 @@ class Model(nnx.Module):
             kernel_size=(3, 3),
             padding='SAME',
             rngs=rngs,
+            param_dtype=param_dtype,
+            use_bias=use_bias,
+            kernel_init=nnx.with_partitioning(init_fn, partitioning),
         )
         # self.upscale_other = nnx.ConvTranspose(
         #     in_features=3,
@@ -73,13 +86,35 @@ class Model(nnx.Module):
         # )
 
     def __call__(self, x: jax.Array):
-        new_shape = (x.shape[0], x.shape[1] * self._factor,
-                     x.shape[2] * self._factor, INTERMEDIATE_FEATS)
+        # assert_arr_num(x)
+
+        # print(f"x shape: {x.shape}")
+        
+        new_shape = (x.shape[0], x.shape[1] * 2,
+                     x.shape[2] * 2, 3)
         upscaled = jax.image.resize(x, new_shape, "nearest")
 
+        # assert_arr_num(upscaled)
+
+        # print(f"upscaled shape: {upscaled.shape}")
+
+        # assert_arr_num(self.deep.kernel.value)
         out = self.deep(upscaled)
+        # assert_arr_num(out)
+        # out = jnn.sigmoid(out)
+        # assert_arr_num(out)
+
+        # assert_arr_num(self.deeper.kernel)
         out = self.deeper(out)
+        # assert_arr_num(out)
+        # out = jnn.sigmoid(out)
+        # assert_arr_num(out)
+
+        # assert_arr_num(self.deepest.kernel)
         out = self.deepest(out)
+        # assert_arr_num(out)
+        # out = jnn.sigmoid(out) * 255
+        # assert_arr_num(out)
 
         # Main line of dilated convolution plus regular conv layer(s)
         # out = self.upscale_rgb(x)
@@ -98,26 +133,7 @@ class Model(nnx.Module):
         # Convolve the main line output by the embedding
         # return jax.scipy.signal.convolve(out, embed, mode='same', method='direct')
 
-        return out
-
-
-@jax.jit
-def apply_model(state: TrainState, X: jax.Array, Y: jax.Array):
-    """Computes gradients, loss and accuracy for a single batch."""
-
-    def loss_fn(params):
-        preds = state.apply_fn(params, X)
-        loss = jnp.mean(optax.squared_error(preds, Y))
-        return loss, preds
-
-    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss, preds), grads = grad_fn(state.params)
-    return grads, loss
-
-
-@jax.jit
-def update_model(state: TrainState, grads):
-    return state.apply_gradients(grads=grads)
+        return out * 255.0
 
 
 def erase_and_create_empty(path: str) -> Path:
