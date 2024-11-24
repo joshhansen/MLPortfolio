@@ -715,29 +715,25 @@ fn run_multi(
                             let pred = model.upscale(small, true);
                             let loss = MseLoss::new().forward(pred, large, Reduction::Mean);
 
-                            println!(
-                                "[Train - Epoch {} - Iteration {}] Loss {:.3}",
+                            print!(
+                                "\r[Train - Epoch {} - Iteration {}] Loss {:.3}",
                                 epoch,
                                 iteration,
                                 loss.clone().into_scalar(),
-                                // accuracy,
                             );
+                            stdout().flush().unwrap();
 
                             // Gradients for the current backward pass
                             let grads = loss.backward();
 
-                            println!("Got grads");
-
                             // Gradients linked to each parameter of the model.
                             let grads = GradientsParams::from_grads(grads, &model);
-                            println!("Got individual grads");
 
                             // Update the model using the optimizer.
                             model = optim.step(config.lr, model, grads);
 
                             tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
 
-                            println!("Stepped");
                         }
                     }
                 }
@@ -752,12 +748,13 @@ fn run_multi(
                             let pred = model_valid.upscale(small, false);
                             let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
 
-                            println!(
-                                "[Valid - Epoch {} - Iteration {}] Loss {}",
+                            print!(
+                                "\r[Valid - Epoch {} - Iteration {}] Loss {}",
                                 epoch,
                                 iteration,
                                 loss.clone().into_scalar(),
                             );
+                            stdout().flush().unwrap();
                         }
                     }
                 }
