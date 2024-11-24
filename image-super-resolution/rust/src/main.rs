@@ -200,6 +200,9 @@ impl<B: Backend> ImageSRBatcher<B> {
 
         let img = img * if normalize { 255.0 } else { 1.0 };
 
+        // Set the root of autodiff here
+        let img = img.detach();
+
         Ok(Some(img))
     }
 }
