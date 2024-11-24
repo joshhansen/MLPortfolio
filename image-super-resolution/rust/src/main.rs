@@ -11,7 +11,7 @@ use burn::{
         dataset::Dataset,
     },
     module::{AutodiffModule, Param},
-    nn::{conv::Conv2d, loss::Reduction, Dropout},
+    nn::{conv::Conv2d, loss::Reduction, Dropout, Relu},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     record::{FullPrecisionSettings, NamedMpkGzFileRecorder},
@@ -309,39 +309,48 @@ pub struct Model<B: Backend> {
     deep: Conv2d<B>,
     deeper: Conv2d<B>,
     deepest: Conv2d<B>,
-    // pool: AdaptiveAvgPool2d,
     dropout: Dropout,
-    // linear1: Linear<B>,
-    // linear2: Linear<B>,
-    activation: Sigmoid,
+    relu: Relu,
+    sigmoid: Sigmoid,
 }
 impl<B: Backend> Model<B> {
     /// Refine an already-upscaled image to look more realistic and remove jpeg artifacts
+    ///
+    /// A single resnet with three conv layers
+    ///
+    /// The "small" input image should actually be the intended size already
+    /// This model only refines an already-upscaled image.
+    /// Use a nearest-neighbor upscale first.
     ///
     /// # Shapes
     /// - Small images (batch, width, height, channel)
     fn upscale(&self, small: Tensor<B, 4>, training: bool) -> Tensor<B, 4> {
         // the input is in [0, 1]
 
-        let mut x = self.deep.forward(small);
+        let mut x = self.deep.forward(small.clone());
         if training {
             x = self.dropout.forward(x);
         }
-        let x = self.activation.forward(x);
+        let x = self.relu.forward(x);
 
         let mut x = self.deeper.forward(x);
         if training {
             x = self.dropout.forward(x);
         }
-        let x = self.activation.forward(x);
+        let x = self.relu.forward(x);
 
         let mut x = self.deepest.forward(x);
         if training {
             x = self.dropout.forward(x);
         }
 
+        assert_eq!(small.shape(), x.shape());
+
+        // The skip/residual connection
+        let x = small + x;
+
         // the output is in [0, 255]
-        self.activation.forward(x) * 255.0
+        self.sigmoid.forward(x) * 255.0
     }
 }
 
@@ -364,10 +373,8 @@ impl ModelConfig {
             deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
                 .with_padding(PaddingConfig2d::Same)
                 .init(device),
-            // pool: AdaptiveAvgPool2dConfig::new([8, 8]).init(),
-            activation: Sigmoid::new(),
-            // linear1: LinearConfig::new(16 * 8 * 8, self.hidden_size).init(device),
-            // linear2: LinearConfig::new(self.hidden_size, self.num_classes).init(device),
+            relu: Relu::new(),
+            sigmoid: Sigmoid::new(),
             dropout: DropoutConfig::new(self.dropout).init(),
         }
     }
