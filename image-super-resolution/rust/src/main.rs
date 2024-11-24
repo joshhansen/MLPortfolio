@@ -92,7 +92,7 @@ impl ImageSRDataset {
 
 impl Dataset<ImageSRItem> for ImageSRDataset {
     fn get(&self, index: usize) -> Option<ImageSRItem> {
-        let p = index & self.partitions;
+        let p = index % self.partitions;
         if p != self.partition {
             return None;
         }
