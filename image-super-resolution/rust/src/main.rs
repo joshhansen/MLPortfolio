@@ -305,13 +305,65 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct Model<B: Backend> {
-    deep: Conv2d<B>,
-    deeper: Conv2d<B>,
-    deepest: Conv2d<B>,
+pub struct ResUnit<B: Backend> {
+    convs: Vec<Conv2d<B>>,
     dropout: Dropout,
     relu: Relu,
     sigmoid: Sigmoid,
+}
+impl<B: Backend> ResUnit<B> {
+    /// Input is in [0, 1]
+    /// Output is in [0, 1]
+    fn forward(&self, mut x: Tensor<B, 4>, train: bool) -> Tensor<B, 4> {
+        let skip = x.clone();
+
+        for conv in self.convs.iter() {
+            x = conv.forward(x);
+            if train {
+                x = self.dropout.forward(x);
+            }
+            x = self.relu.forward(x);
+        }
+
+        assert_eq!(skip.shape(), x.shape());
+
+        x = skip + x;
+
+        self.sigmoid.forward(x)
+    }
+}
+
+#[derive(Config, Debug)]
+pub struct ResUnitConfig {
+    #[config(default = "0.5")]
+    dropout: f64,
+}
+
+impl ResUnitConfig {
+    /// Returns the initialized model.
+    pub fn init<B: Backend>(&self, device: &B::Device) -> ResUnit<B> {
+        ResUnit {
+            convs: vec![
+                Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [7, 7])
+                    .with_padding(PaddingConfig2d::Same)
+                    .init(device),
+                Conv2dConfig::new([INTERMEDIATE_FEATURES, INTERMEDIATE_FEATURES], [5, 5])
+                    .with_padding(PaddingConfig2d::Same)
+                    .init(device),
+                Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
+                    .with_padding(PaddingConfig2d::Same)
+                    .init(device),
+            ],
+            relu: Relu::new(),
+            sigmoid: Sigmoid::new(),
+            dropout: DropoutConfig::new(self.dropout).init(),
+        }
+    }
+}
+
+#[derive(Module, Debug)]
+pub struct Model<B: Backend> {
+    units: Vec<ResUnit<B>>,
 }
 impl<B: Backend> Model<B> {
     /// Refine an already-upscaled image to look more realistic and remove jpeg artifacts
@@ -324,58 +376,32 @@ impl<B: Backend> Model<B> {
     ///
     /// # Shapes
     /// - Small images (batch, width, height, channel)
-    fn upscale(&self, small: Tensor<B, 4>, training: bool) -> Tensor<B, 4> {
+    fn upscale(&self, mut x: Tensor<B, 4>, train: bool) -> Tensor<B, 4> {
         // the input is in [0, 1]
 
-        let mut x = self.deep.forward(small.clone());
-        if training {
-            x = self.dropout.forward(x);
-        }
-        let x = self.relu.forward(x);
-
-        let mut x = self.deeper.forward(x);
-        if training {
-            x = self.dropout.forward(x);
-        }
-        let x = self.relu.forward(x);
-
-        let mut x = self.deepest.forward(x);
-        if training {
-            x = self.dropout.forward(x);
+        for unit in &self.units {
+            x = unit.forward(x, train);
         }
 
-        assert_eq!(small.shape(), x.shape());
-
-        // The skip/residual connection
-        let x = small + x;
-
-        // the output is in [0, 255]
-        self.sigmoid.forward(x) * 255.0
+        // output is in [0, 255]
+        x * 255.0
     }
 }
 
 #[derive(Config, Debug)]
 pub struct ModelConfig {
-    #[config(default = "0.1")]
-    dropout: f64,
+    #[config(default = 3)]
+    pub units: usize,
+    unit_config: ResUnitConfig,
 }
 
 impl ModelConfig {
     /// Returns the initialized model.
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         Model {
-            deep: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [7, 7])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            deeper: Conv2dConfig::new([INTERMEDIATE_FEATURES, INTERMEDIATE_FEATURES], [5, 5])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            relu: Relu::new(),
-            sigmoid: Sigmoid::new(),
-            dropout: DropoutConfig::new(self.dropout).init(),
+            units: (0..self.units)
+                .map(|_| self.unit_config.init(device))
+                .collect(),
         }
     }
 }
@@ -411,7 +437,8 @@ pub fn run<B: AutodiffBackend>(
     output_dir: &Path,
     factor: usize,
 ) {
-    let config_model = ModelConfig { dropout: 0.2 };
+    let config_unit = ResUnitConfig::new();
+    let config_model = ModelConfig::new(config_unit);
     let config_optimizer = AdamConfig::new();
     let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
 
@@ -642,7 +669,9 @@ fn run_multi(
     factor: usize,
 ) {
     type B = Autodiff<Wgpu>;
-    let config_model = ModelConfig { dropout: 0.2 };
+    let config_unit = ResUnitConfig::new();
+    let config_model = ModelConfig::new(config_unit);
+
     let config_optimizer = AdamConfig::new();
     let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
 
@@ -733,7 +762,6 @@ fn run_multi(
                             model = optim.step(config.lr, model, grads);
 
                             tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
-
                         }
                     }
                 }
