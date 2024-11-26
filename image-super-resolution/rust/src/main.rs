@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::{stdout, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -58,6 +59,9 @@ enum Commands {
         /// Moving average window for reporting
         #[arg(long, default_value_t = 100)]
         recent_window: usize,
+
+        #[arg(long, short, default_value_t = 3)]
+        units: usize,
     },
 }
 
@@ -436,9 +440,14 @@ pub fn run<B: AutodiffBackend>(
     valid_large_dir: &Path,
     output_dir: &Path,
     factor: usize,
+    units: usize,
 ) {
     let config_unit = ResUnitConfig::new();
-    let config_model = ModelConfig::new(config_unit);
+    let config_model = {
+        let mut c = ModelConfig::new(config_unit);
+        c.units = units;
+        c
+    };
     let config_optimizer = AdamConfig::new();
     let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
 
@@ -610,6 +619,38 @@ fn mean_conv2d_from_parts<B: Backend>(
     c
 }
 
+fn mean_resunit_from_parts<B: Backend>(
+    mut u: ResUnit<B>,
+    mut parts: Vec<ResUnitTensors<B>>,
+    dev: &B::Device,
+) -> ResUnit<B> {
+    let l = parts[0].convs.len();
+    for p in &parts {
+        assert_eq!(l, p.convs.len());
+    }
+
+    let mut src_convs: VecDeque<Conv2d<B>> = u.convs.into_iter().collect();
+
+    let mut convs: Vec<Conv2d<B>> = Vec::with_capacity(l);
+
+    let num_parts = parts.len();
+
+    for _ in 0..l {
+        let mut unit_parts: Vec<Conv2dTensors<B>> = Vec::with_capacity(num_parts);
+        for p in &mut parts {
+            unit_parts.push(p.convs.pop_front().unwrap());
+        }
+
+        let c = src_convs.pop_front().unwrap();
+
+        convs.push(mean_conv2d_from_parts(c, unit_parts, dev));
+    }
+
+    u.convs = convs;
+
+    u
+}
+
 #[derive(Clone)]
 struct Conv2dTensors<B: Backend> {
     weight: Tensor<B, 4>,
@@ -633,26 +674,39 @@ impl<B: Backend> From<Conv2d<B>> for Conv2dTensors<B> {
 }
 
 #[derive(Clone)]
+struct ResUnitTensors<B: Backend> {
+    convs: VecDeque<Conv2dTensors<B>>,
+}
+impl<B: Backend> ResUnitTensors<B> {
+    fn to_device(self, dev: &B::Device) -> Self {
+        Self {
+            convs: self.convs.into_iter().map(|c| c.to_device(dev)).collect(),
+        }
+    }
+}
+impl<B: Backend> From<ResUnit<B>> for ResUnitTensors<B> {
+    fn from(u: ResUnit<B>) -> Self {
+        Self {
+            convs: u.convs.into_iter().map(Conv2dTensors::from).collect(),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct ModelTensors<B: Backend> {
-    deep: Conv2dTensors<B>,
-    deeper: Conv2dTensors<B>,
-    deepest: Conv2dTensors<B>,
+    units: Vec<ResUnitTensors<B>>,
 }
 impl<B: Backend> ModelTensors<B> {
     fn to_device(self, dev: &B::Device) -> Self {
         Self {
-            deep: self.deep.to_device(dev),
-            deeper: self.deeper.to_device(dev),
-            deepest: self.deepest.to_device(dev),
+            units: self.units.into_iter().map(|u| u.to_device(dev)).collect(),
         }
     }
 }
 impl<B: Backend> From<Model<B>> for ModelTensors<B> {
     fn from(m: Model<B>) -> Self {
         Self {
-            deep: Conv2dTensors::from(m.deep),
-            deeper: Conv2dTensors::from(m.deeper),
-            deepest: Conv2dTensors::from(m.deepest),
+            units: m.units.into_iter().map(ResUnitTensors::from).collect(),
         }
     }
 }
@@ -796,30 +850,19 @@ fn run_multi(
         models[gpu] = Some(gpu_model.to_device(&control_dev));
 
         let mut mean_model: Model<B> = config.model.init(&control_dev);
-        mean_model.deep = mean_conv2d_from_parts(
-            mean_model.deep,
-            models
-                .iter()
-                .map(|m| m.as_ref().unwrap().deep.clone())
-                .collect(),
-            &control_dev,
-        );
-        mean_model.deeper = mean_conv2d_from_parts(
-            mean_model.deeper,
-            models
-                .iter()
-                .map(|m| m.as_ref().unwrap().deeper.clone())
-                .collect(),
-            &control_dev,
-        );
-        mean_model.deepest = mean_conv2d_from_parts(
-            mean_model.deepest,
-            models
-                .iter()
-                .map(|m| m.as_ref().unwrap().deepest.clone())
-                .collect(),
-            &control_dev,
-        );
+
+        mean_model.units = mean_model
+            .units
+            .into_iter()
+            .enumerate()
+            .map(|(unit_idx, u)| {
+                let mut model_units: Vec<ResUnitTensors<B>> = Vec::with_capacity(models.len());
+                for model_idx in 0..models.len() {
+                    model_units.push(models[model_idx].as_ref().unwrap().units[unit_idx].clone());
+                }
+                mean_resunit_from_parts(u, model_units, &control_dev)
+            })
+            .collect();
     }
 }
 
@@ -840,6 +883,7 @@ fn main() -> Result<(), walkdir::Error> {
             epochs,
             recent_window,
             factor,
+            units,
         } => {
             run::<Autodiff<B>>(
                 &dev,
@@ -849,6 +893,7 @@ fn main() -> Result<(), walkdir::Error> {
                 valid_large_dir,
                 output_dir,
                 *factor,
+                *units,
             );
         }
     }
