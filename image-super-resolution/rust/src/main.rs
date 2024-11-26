@@ -25,13 +25,16 @@ use image::{
 };
 use nn::{conv::Conv2dConfig, loss::MseLoss, DropoutConfig, PaddingConfig2d, Sigmoid};
 
-type fX = f32;
-
 const W_SMALL: usize = 700;
 const H_SMALL: usize = 700;
 const W_LARGE: usize = 1400;
 const H_LARGE: usize = 1400;
 const INTERMEDIATE_FEATURES: usize = 16;
+
+lazy_static::lazy_static! {
+    static ref RECORDER: NamedMpkGzFileRecorder<FullPrecisionSettings> =
+        NamedMpkGzFileRecorder::new();
+}
 
 #[derive(Parser)]
 #[command(version, about = "Image super-resolution trainer", long_about = None)]
@@ -50,19 +53,41 @@ enum Commands {
         output_dir: PathBuf,
         factor: usize,
 
-        #[arg(long, default_value_t = 1e-4)]
-        lr: fX,
+        #[arg(long, default_value_t = 1e-5)]
+        lr: f64,
 
         #[arg(long, default_value_t = 100)]
         epochs: usize,
 
-        /// Moving average window for reporting
-        #[arg(long, default_value_t = 100)]
-        recent_window: usize,
-
-        #[arg(long, short, default_value_t = 3)]
+        #[arg(long, short = 'u', default_value_t = 3)]
         units: usize,
+
+        #[arg(long, short = 'd', default_value = "0", value_parser = parse_device)]
+        dev: Vec<WgpuDevice>,
     },
+}
+
+fn parse_device(s: &str) -> Result<WgpuDevice, String> {
+    if s == "cpu" {
+        return Ok(WgpuDevice::Cpu);
+    }
+
+    let idx: usize = s
+        .parse()
+        .map_err(|_| format!("Unrecognized device: {}", s))?;
+
+    Ok(WgpuDevice::DiscreteGpu(idx))
+}
+
+fn write_state<B: Backend>(epoch: usize, model: Model<B>, output_dir: &Path) {
+    let model_path = {
+        let mut p = output_dir.to_path_buf();
+        p.push(epoch.to_string());
+        p
+    };
+    model
+        .save_file(model_path, &*RECORDER)
+        .expect("Should be able to save the model");
 }
 
 struct ImageSRDataset {
@@ -440,7 +465,9 @@ pub fn run<B: AutodiffBackend>(
     valid_large_dir: &Path,
     output_dir: &Path,
     factor: usize,
+    epochs: usize,
     units: usize,
+    lr: f64,
 ) {
     let config_unit = ResUnitConfig::new();
     let config_model = {
@@ -449,7 +476,12 @@ pub fn run<B: AutodiffBackend>(
         c
     };
     let config_optimizer = AdamConfig::new();
-    let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
+    let config = {
+        let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
+        c.lr = lr;
+        c.num_epochs = epochs;
+        c
+    };
 
     B::seed(config.seed);
 
@@ -484,8 +516,6 @@ pub fn run<B: AutodiffBackend>(
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(ImageSRDataset::load(valid_small_dir, valid_large_dir, 1, 0));
-
-    let recorder = NamedMpkGzFileRecorder::<FullPrecisionSettings>::new();
 
     // Iterate over our training and validation loop for X epochs.
     for epoch in 1..config.num_epochs + 1 {
@@ -525,15 +555,7 @@ pub fn run<B: AutodiffBackend>(
 
         println!();
 
-        let model_path = {
-            let mut p = output_dir.to_path_buf();
-            p.push(epoch.to_string());
-            p
-        };
-        model
-            .clone()
-            .save_file(model_path, &recorder)
-            .expect("Should be able to save the model");
+        write_state(epoch, model.clone(), output_dir);
 
         let mut total_valid_loss = 0.0f64;
         let mut valid_batches = 0usize;
@@ -609,8 +631,8 @@ fn mean_conv2d_from_parts<B: Backend>(
     let mut bias = Vec::with_capacity(parts.len());
 
     for p in parts {
-        weight.push(p.weight.into());
-        bias.push(p.bias.unwrap().into());
+        weight.push(p.weight);
+        bias.push(p.bias.unwrap());
     }
 
     c.weight = Param::from_tensor(mean_tensor(weight, dev));
@@ -720,14 +742,27 @@ fn run_multi(
     train_large_dir: &Path,
     valid_small_dir: &Path,
     valid_large_dir: &Path,
+    output_dir: &Path,
     factor: usize,
+    epochs: usize,
+    units: usize,
+    lr: f64,
 ) {
     type B = Autodiff<Wgpu>;
     let config_unit = ResUnitConfig::new();
-    let config_model = ModelConfig::new(config_unit);
+    let config_model = {
+        let mut c = ModelConfig::new(config_unit);
+        c.units = units;
+        c
+    };
 
     let config_optimizer = AdamConfig::new();
-    let config = ImageSRTrainingConfig::new(config_model, config_optimizer);
+    let config = {
+        let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
+        c.lr = lr;
+        c.num_epochs = epochs;
+        c
+    };
 
     B::seed(config.seed);
 
@@ -845,7 +880,7 @@ fn run_multi(
     }
 
     let mut models = vec![None; devices.len()];
-    loop {
+    for epoch in 0..usize::MAX {
         let (gpu, gpu_model) = rx.recv().unwrap();
         models[gpu] = Some(gpu_model.to_device(&control_dev));
 
@@ -857,12 +892,14 @@ fn run_multi(
             .enumerate()
             .map(|(unit_idx, u)| {
                 let mut model_units: Vec<ResUnitTensors<B>> = Vec::with_capacity(models.len());
-                for model_idx in 0..models.len() {
-                    model_units.push(models[model_idx].as_ref().unwrap().units[unit_idx].clone());
+                for m in &models {
+                    model_units.push(m.as_ref().unwrap().units[unit_idx].clone());
                 }
                 mean_resunit_from_parts(u, model_units, &control_dev)
             })
             .collect();
+
+        write_state(epoch, mean_model.clone(), output_dir);
     }
 }
 
@@ -870,9 +907,8 @@ fn main() -> Result<(), walkdir::Error> {
     let cli = Cli::parse();
 
     type B = Wgpu<f32, i32>;
-    let dev = Default::default();
 
-    match &cli.command {
+    match cli.command {
         Commands::Train {
             train_small_dir,
             train_large_dir,
@@ -881,20 +917,41 @@ fn main() -> Result<(), walkdir::Error> {
             output_dir,
             lr,
             epochs,
-            recent_window,
             factor,
             units,
+            dev,
         } => {
-            run::<Autodiff<B>>(
-                &dev,
-                train_small_dir,
-                train_large_dir,
-                valid_small_dir,
-                valid_large_dir,
-                output_dir,
-                *factor,
-                *units,
-            );
+            assert!(!dev.is_empty());
+
+            if dev.len() == 1 {
+                let mut dev = dev;
+                let dev = dev.pop().unwrap();
+                run::<Autodiff<B>>(
+                    &dev,
+                    &train_small_dir,
+                    &train_large_dir,
+                    &valid_small_dir,
+                    &valid_large_dir,
+                    &output_dir,
+                    factor,
+                    epochs,
+                    units,
+                    lr,
+                );
+            } else {
+                run_multi(
+                    dev,
+                    &train_small_dir,
+                    &train_large_dir,
+                    &valid_small_dir,
+                    &valid_large_dir,
+                    &output_dir,
+                    factor,
+                    epochs,
+                    units,
+                    lr,
+                )
+            }
         }
     }
 
