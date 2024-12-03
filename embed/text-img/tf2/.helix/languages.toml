@@ -1,0 +1,2 @@
+[language-server.pylsp]
+command = "text-img-embed-pylsp"
