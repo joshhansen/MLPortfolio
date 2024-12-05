@@ -4,6 +4,7 @@ import tensorflow as tf
 import tensorflow_text as tft
 
 from gutenberg import GutenbergTextDataset
+from wptitles import WikipediaTitlesDataset
 
 if __name__=="__main__":
  with tf.device('/CPU:0'):
@@ -12,9 +13,12 @@ if __name__=="__main__":
   img_dir = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png_not-too-big')
 
   tokenizer = tft.UnicodeScriptTokenizer()
-  text = GutenbergTextDataset(text_dir)
-  text = text.map(lambda x: tft.ngrams(tokenizer.tokenize(x), 5, reduction_type=tft.Reduction.STRING_JOIN, string_separator='\x00'))
+  # text = GutenbergTextDataset(text_dir)
+  # text = text.map(lambda x: tft.ngrams(tokenizer.tokenize(x), 5, reduction_type=tft.Reduction.STRING_JOIN, string_separator='\x00'))
   # text = text.shuffle(200)
+
+  wptitles_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0.gz')
+  text = WikipediaTitlesDataset(wptitles_path)
 
   images = tf.keras.preprocessing.image_dataset_from_directory(
    img_dir,
