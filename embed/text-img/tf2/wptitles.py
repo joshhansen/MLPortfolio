@@ -5,11 +5,11 @@ from pathlib import Path
 import tensorflow as tf
 
 def normalize(s: str):
-    return s.lower()
+    return s.lower().replace('_', ' ').strip()
 
 class WikipediaTitlesDataset(tf.data.Dataset):
     def _generator(path: Path):
-        with gzip.open(path, 'r') as r:
+        with gzip.open(path, 'rt') as r:
             it = iter(r)
 
             _header = next(it)

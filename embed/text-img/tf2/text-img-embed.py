@@ -3,6 +3,8 @@ import os
 import tensorflow as tf
 import tensorflow_text as tft
 
+from t2i import T2I
+
 from gutenberg import GutenbergTextDataset
 from wptitles import WikipediaTitlesDataset
 
@@ -19,6 +21,7 @@ if __name__=="__main__":
 
   wptitles_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0.gz')
   text = WikipediaTitlesDataset(wptitles_path)
+  text = text.map(lambda x: tokenizer.tokenize(x))
 
   images = tf.keras.preprocessing.image_dataset_from_directory(
    img_dir,
@@ -35,7 +38,43 @@ if __name__=="__main__":
 
   # for datum in data:
   #  print(datum)
-   # pass
+  # pass
+  EMBED = 64
+  WORD_EMBED = EMBED
+
+  word_emb = tf.keras.layers.Embedding(
+  )
+  txt2emb = tf.keras.models.Sequential([
+   tf.keras.layers.Flatten(input_shape=(28, 28)),
+   tf.keras.layers.Dense(128, activation='relu'),
+   tf.keras.layers.Dropout(0.2),
+   tf.keras.layers.Dense(10, activation='softmax')
+  ])
+  emb2txt = tf.keras.models.Sequential([
+   tf.keras.layers.Flatten(input_shape=(28, 28)),
+   tf.keras.layers.Dense(128, activation='relu'),
+   tf.keras.layers.Dropout(0.2),
+   tf.keras.layers.Dense(10, activation='softmax')
+  ])
+  img2emb = tf.keras.models.Sequential([
+   tf.keras.layers.Flatten(input_shape=(28, 28)),
+   tf.keras.layers.Dense(128, activation='relu'),
+   tf.keras.layers.Dropout(0.2),
+   tf.keras.layers.Dense(10, activation='softmax')
+  ])
+  emb2img = tf.keras.models.Sequential([
+   tf.keras.layers.Flatten(input_shape=(28, 28)),
+   tf.keras.layers.Dense(128, activation='relu'),
+   tf.keras.layers.Dropout(0.2),
+   tf.keras.layers.Dense(10, activation='softmax')
+  ])
+
+ model.compile(optimizer='adam',
+   loss='sparse_categorical_crossentropy',
+   metrics=['accuracy'])
+
+ model.fit(x_train, y_train, epochs=5)
+ model.evaluate(x_test, y_test)
 
   it_txt = iter(text)
   it_img = iter(images)
@@ -46,10 +85,10 @@ if __name__=="__main__":
    except StopIteration:
     pass
 
-   try:
-    img = next(it_img)
-    print(img)
-   except StopIteration:
-    pass
+   # try:
+   #  img = next(it_img)
+   #  print(img)
+   # except StopIteration:
+   #  pass
 
 
