@@ -1,2 +1,16 @@
+
+[[language]]
+name = "python"
+auto-format = true
+language-servers = [ "pylsp" ]
+injection-regex = "python"
+file-types = ["py"]
+indent = { tab-width = 1, unit = " " }
+formatter = { command = "text-img-embed-black" }
+
 [language-server.pylsp]
 command = "text-img-embed-pylsp"
+
+[language-server.pylsp.config.pylsp]
+plugins.pylsp_mypy.enabled = true
+plugins.pylsp_mypy.live_mode = true
