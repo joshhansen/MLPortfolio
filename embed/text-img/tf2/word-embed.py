@@ -1,11 +1,12 @@
 from collections import Counter
 import os
 
+import numpy as np
 import tensorflow as tf
 import tensorflow_text as tft
 
-from t2i import T2I
 
+from grapheme_idx import GraphemeIdx, load_grapheme_idx
 from wptitles import WikipediaTitlesDataset
 
 BATCH=10
@@ -20,19 +21,34 @@ def pad(a: list[int], pad: int, pad_to: int) -> list[int]:
  print(f"pad_to: {pad_to}")
  return a + [pad] * (pad_to- len(a))
 
-def index_batch(grapheme_idx: T2I, batched_token_graphemes: list[list[str]]):
- pad_idx = grapheme_idx.index(grapheme_idx.pad_token)[0]
- print(f"pad: {pad_idx}")
- print(f"batched_token_graphemes: {batched_token_graphemes}")
+# def index_batch(grapheme_idx: T2I, batched_token_graphemes: list[list[str]]):
+#  pad_idx = grapheme_idx.index(grapheme_idx.pad_token)[0]
+#  print(f"pad: {pad_idx}")
+#  print(f"batched_token_graphemes: {batched_token_graphemes}")
 
- max_len = max([len(t) for t in batched_token_graphemes])
- indices = [flatten(grapheme_idx.index(graphemes)) for graphemes in batched_token_graphemes]
- print(f"indices: {indices}")
- # indices = [x[0] for x in indices]
- # print(f"indices2: {indices}")
- padded = [pad(token_grapheme_indices, pad_idx, max_len) for token_grapheme_indices in indices]
- print(f"padded: {padded}")
- return padded, max_len
+#  max_len = max([len(t) for t in batched_token_graphemes])
+#  indices = [flatten(grapheme_idx.index(graphemes)) for graphemes in batched_token_graphemes]
+#  print(f"indices: {indices}")
+#  # indices = [x[0] for x in indices]
+#  # print(f"indices2: {indices}")
+#  padded = [pad(token_grapheme_indices, pad_idx, max_len) for token_grapheme_indices in indices]
+#  print(f"padded: {padded}")
+#  return padded, max_len
+
+def positional_encoding(length, depth):
+  depth = depth/2
+
+  positions = np.arange(length)[:, np.newaxis]     # (seq, 1)
+  depths = np.arange(depth)[np.newaxis, :]/depth   # (1, depth)
+
+  angle_rates = 1 / (10000**depths)         # (1, depth)
+  angle_rads = positions * angle_rates      # (pos, depth)
+
+  pos_encoding = np.concatenate(
+      [np.sin(angle_rads), np.cos(angle_rads)],
+      axis=-1) 
+
+  return tf.cast(pos_encoding, dtype=tf.float32)
 
 class PositionalEmbedding(tf.keras.layers.Layer):
  def __init__(self, vocab_size, d_model):
@@ -44,8 +60,10 @@ class PositionalEmbedding(tf.keras.layers.Layer):
  def compute_mask(self, *args, **kwargs):
   return self.embedding.compute_mask(*args, **kwargs)
 
- def call(self, x):
-  length = tf.shape(x)[1]
+ def call(self, x: tf.Tensor):
+  print(f"x.get_shape: {x.get_shape()}")
+  length = x.get_shape()[1]
+  print(f"x.get_shape()[1]: {x.get_shape()[1]}")
   x = self.embedding(x)
   # This factor sets the relative scale of the embedding and positonal_encoding.
   x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -147,8 +165,8 @@ class Encoder(tf.keras.layers.Layer):
       for _ in range(num_layers)]
   self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
- def call(self, x):
-  # `x` is token-IDs shape: (batch, seq_len)
+ # x: (batch, seq_len); token IDs (int datatype)
+ def call(self, x: tf.Tensor):
   x = self.pos_embedding(x)  # Shape `(batch_size, seq_len, d_model)`.
 
   # Add dropout.
@@ -281,7 +299,9 @@ class Decoder(tf.keras.layers.Layer):
 
   self.last_attn_scores = None
 
- def call(self, x, context):
+ def call(self, x: tf.Tensor, context: tf.Tensor):
+  print(f"Decoder x.get_shape: {x.get_shape()}")
+  print(f"Decoder context.get_shape: {context.get_shape()}")
   # `x` is token-IDs shape (batch, target_seq_len)
   x = self.pos_embedding(x)  # (batch_size, target_seq_len, d_model)
 
@@ -316,12 +336,21 @@ class Transformer(tf.keras.Model):
   # first argument.
   context, x  = inputs
 
+  print(f"Transformer x.get_shape: {x.get_shape()}")
+  print(f"Transformer context.get_shape: {context.get_shape()}")
+
   context = self.encoder(context)  # (batch_size, context_len, d_model)
+
+  print(f"Transformer context.get_shape 2: {context.get_shape()}")
 
   x = self.decoder(x, context)  # (batch_size, target_len, d_model)
 
+  print(f"Transformer x.get_shape 2: {x.get_shape()}")
+
   # Final linear layer output.
   logits = self.final_layer(x)  # (batch_size, target_len, target_vocab_size)
+
+  print(f"Transformer logits.get_shape: {logits.get_shape()}")
 
   try:
     # Drop the keras mask, so it doesn't scale the losses/metrics.
@@ -334,92 +363,108 @@ class Transformer(tf.keras.Model):
   return logits
 
 
-class WordAutoencoder(tf.keras.layers.Layer):
-    def __init__(self, grapheme_count: int):
-        super().__init__()
+# class WordAutoencoder(tf.keras.layers.Layer):
+#     def __init__(self, grapheme_count: int):
+#         super().__init__()
 
-        self.transformer = Transformer(
-         num_layers: int, d_model: int, num_heads: int, dff: int,
-         input_vocab_size: int, target_vocab_size: int, dropout_rate=0.1
-        )
+#         self.transformer = Transformer(num_layers, d_model: int, num_heads: int, dff: int,
+#          input_vocab_size: int, target_vocab_size: int, dropout_rate=0.1
+#         )
 
-        # self.grapheme_enc_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, EMBED), initializer="random_normal", trainable=True)
-        # self.grapheme_dec_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, grapheme_count), initializer="random_normal", trainable=True)
-        self.grapheme_emb = tf.keras.layers.Embedding(
-         grapheme_count,
-         EMBED,
-        )
-        # self.grapheme_attn_enc = tf.keras.layers.Attention()
-        # self.grapheme_attn_dec = tf.keras.layers.Attention()
-        # self.grapheme_attn = tf.keras.layers.MultiHeadAttention(key_dim=EMBED, num_heads=1)
+#         # self.grapheme_enc_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, EMBED), initializer="random_normal", trainable=True)
+#         # self.grapheme_dec_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, grapheme_count), initializer="random_normal", trainable=True)
+#         self.grapheme_emb = tf.keras.layers.Embedding(
+#          grapheme_count,
+#          EMBED,
+#         )
+#         # self.grapheme_attn_enc = tf.keras.layers.Attention()
+#         # self.grapheme_attn_dec = tf.keras.layers.Attention()
+#         # self.grapheme_attn = tf.keras.layers.MultiHeadAttention(key_dim=EMBED, num_heads=1)
 
-    # token_grapheme_indices: (batch, token, grapheme); integers representing token indices 
-    def call(self, token_grapheme_indices: tf.Tensor):
-     print(grapheme_indices)
-     # shape: batch, token, grapheme
+#     # token_grapheme_indices: (batch, token, grapheme); integers representing token indices 
+#     def call(self, token_grapheme_indices: tf.Tensor):
+#      print(grapheme_indices)
+#      # shape: batch, token, grapheme
 
-     grapheme_embs = self.grapheme_emb(grapheme_indices)
-     print(grapheme_embs)
+#      grapheme_embs = self.grapheme_emb(grapheme_indices)
+#      print(grapheme_embs)
 
-     # token_emb = self.grapheme_attn([self.grapheme_query, grapheme_embs])
-     # token_emb = self.grapheme_attn(query=self.grapheme_query, value=grapheme_embs)
+#      # token_emb = self.grapheme_attn([self.grapheme_query, grapheme_embs])
+#      # token_emb = self.grapheme_attn(query=self.grapheme_query, value=grapheme_embs)
 
-     #TODO decoder
+#      #TODO decoder
 
-     # prior = tf.zeros((BATCH, ))
-     # while True:
+#      # prior = tf.zeros((BATCH, ))
+#      # while True:
 
-     output = self.transformer(grapheme_embs)
+#      output = self.transformer(grapheme_embs)
 
-     return token_emb
+#      return token_emb
 
 class Translator(tf.Module):
-  def __init__(self, tokenizers, transformer):
-    self.tokenizers = tokenizers
-    self.transformer = transformer
+  def __init__(self, grapheme_idx: GraphemeIdx, transformer: Transformer):
+   self.grapheme_idx = grapheme_idx
+   self.transformer = transformer
 
-  def __call__(self, sentence, max_length=MAX_TOKENS):
-    # The input sentence is Portuguese, hence adding the `[START]` and `[END]` tokens.
-    assert isinstance(sentence, tf.Tensor)
-    if len(sentence.shape) == 0:
-      sentence = sentence[tf.newaxis]
+  # tokens: list of strings of shape (batch,)
+  def __call__(self, tokens: list[str], int_dtype=tf.int64):
+    grapheme_indices = self.grapheme_idx.index_tokens(tokens)
+    max_len = max([len(t) for t in grapheme_indices])
+    grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
+    encoder_input = grapheme_indices
 
-    sentence = self.tokenizers.pt.tokenize(sentence).to_tensor()
-
-    encoder_input = sentence
-
-    # As the output language is English, initialize the output with the
-    # English `[START]` token.
-    start_end = self.tokenizers.en.tokenize([''])[0]
-    start = start_end[0][tf.newaxis]
-    end = start_end[1][tf.newaxis]
+    # Initialize the output with a start token, and prep the end token
+    starts = tf.constant([self.grapheme_idx.start_idx()] * len(tokens), dtype=int_dtype)
+    end = tf.constant(self.grapheme_idx.end_idx(), dtype=int_dtype)
 
     # `tf.TensorArray` is required here (instead of a Python list), so that the
     # dynamic-loop can be traced by `tf.function`.
-    output_array = tf.TensorArray(dtype=tf.int64, size=0, dynamic_size=True)
-    output_array = output_array.write(0, start)
+    output_array = tf.TensorArray(dtype=int_dtype, size=0, dynamic_size=True)
+    output_array = output_array.write(0, starts)
 
-    for i in tf.range(max_length):
+    for i in tf.range(max_len):
       output = tf.transpose(output_array.stack())
+      print(f"Translator encoder_input.get_shape(): {encoder_input.get_shape()}")
+      print(f"Translator output.get_shape(): {output.get_shape()}")
       predictions = self.transformer([encoder_input, output], training=False)
+
+      print(f"Translator predictions.get_shape: {predictions.get_shape()}")
 
       # Select the last token from the `seq_len` dimension.
       predictions = predictions[:, -1:, :]  # Shape `(batch_size, 1, vocab_size)`.
 
+      predictions = tf.squeeze(predictions, axis=1)
+
+      print(f"Translator predictions.get_shape 2: {predictions.get_shape()}")
+
       predicted_id = tf.argmax(predictions, axis=-1)
+
+      print(f"Translator predicted_id.get_shape: {predicted_id.get_shape()}")
 
       # Concatenate the `predicted_id` to the output which is given to the
       # decoder as its input.
-      output_array = output_array.write(i+1, predicted_id[0])
+      output_array = output_array.write(i+1, predicted_id)
 
-      if predicted_id == end:
-        break
+      # ended = predicted_id == end
+
+      # print(f"Translator ended.get_shape: {ended.get_shape()}")
+      # print(f"Translator ended.dtype: {ended.dtype}")
+
+
+      # if ended.all():
+      #   break
+
+      #TODO early exit if all outputs have emitted an end token
 
     output = tf.transpose(output_array.stack())
-    # The output shape is `(1, tokens)`.
-    text = tokenizers.en.detokenize(output)[0]  # Shape: `()`.
 
-    tokens = tokenizers.en.lookup(output)[0]
+    print(f"Translator output.get_shape: {output.get_shape()}")
+
+    # The output shape is `(1, tokens)`.
+    # text = tokenizers.en.detokenize(output)[0]  # Shape: `()`.
+    reconstructed_tokens: list[str] = self.grapheme_idx.unindex_tokens(output.numpy())
+
+    # tokens = tokenizers.en.lookup(output)[0]
 
     # `tf.function` prevents us from using the attention_weights that were
     # calculated on the last iteration of the loop.
@@ -427,7 +472,7 @@ class Translator(tf.Module):
     self.transformer([encoder_input, output[:,:-1]], training=False)
     attention_weights = self.transformer.decoder.last_attn_scores
 
-    return text, tokens, attention_weights
+    return reconstructed_tokens, tokens, attention_weights
 
 if __name__=="__main__":
  with tf.device('/CPU:0'):
@@ -435,21 +480,7 @@ if __name__=="__main__":
   text_dir = os.path.join(home_dir, 'Data', 'org', 'gutenberg', 'mirror_txt')
   img_dir = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png_not-too-big')
 
-  grapheme_counts_path = os.path.join(home_dir, 'Projects', 'ML', 'MLPortfolio', 'embed', 'text-img', 'tf2', 'grapheme_counts_9995.tsv')
-  grapheme_idx = dict()
-  with open(grapheme_counts_path, 'rt') as r:
-   for i, l in enumerate(r):
-    g, c, rel_c, cum_rel_c = l.split('\t')
-    cum_rel_c = cum_rel_c[:-1]
-    c = int(c)
-    rel_c = float(rel_c)
-    cum_rel_c = float(cum_rel_c)
-
-    grapheme_idx[g] = i
-
-  print(grapheme_idx)
-
-  grapheme_idx = T2I(grapheme_idx)
+  grapheme_idx = load_grapheme_idx()
   print(grapheme_idx)
 
   
@@ -470,7 +501,8 @@ if __name__=="__main__":
   num_heads = 8
   dropout_rate = 0.1
 
-  grapheme_count = grapheme_idx.t2i.highest_idx + 1
+  grapheme_count = len(grapheme_idx)
+  print(f"grapheme_count: {grapheme_count}")
 
   transformer = Transformer(
     num_layers=num_layers,
@@ -488,12 +520,12 @@ if __name__=="__main__":
  # model.fit(x_train, y_train, epochs=5)
  # model.evaluate(x_test, y_test)
 
-  m = Translator(transformer)
+  m = Translator(grapheme_idx, transformer)
 
 
 
   it_txt = iter(text)
-  available_tokens = list()
+  available_tokens: list[str] = list()
   while True:
    try:
     txt = next(it_txt)
@@ -509,18 +541,18 @@ if __name__=="__main__":
      print(f"batch len: {len(batch)}")
      print(f"available tokens: {len(available_tokens)}")
 
-     graphemes = [list(t) for t in batch]
-     print(len(graphemes))
-     print(graphemes)
+     # graphemes = [list(t) for t in batch]
+     # print(len(graphemes))
+     # print(graphemes)
 
-     grapheme_indices, max_len = index_batch(grapheme_idx, graphemes)
-     print(grapheme_indices)
-     print(len(grapheme_indices))
+     # grapheme_indices, max_len = index_batch(grapheme_idx, graphemes)
+     # print(grapheme_indices)
+     # print(len(grapheme_indices))
 
-     grapheme_indices = tf.constant(grapheme_indices, dtype=tf.int32, shape=(BATCH, max_len))
+     # grapheme_indices = tf.constant(grapheme_indices, dtype=tf.int32, shape=(BATCH, max_len))
 
-     emb = m(grapheme_indices)
-     print(emb)
+     output, _, __ = m(batch)
+     print(output)
      batch = list()
     # # tokens = txt.to_list()[0]
     # # graphemes = [list(t.decode()) for t in tokens]
