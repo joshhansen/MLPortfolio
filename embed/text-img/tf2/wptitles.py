@@ -23,4 +23,3 @@ class WikipediaTitlesDataset(tf.data.Dataset):
             output_signature = tf.TensorSpec(shape = (1,), dtype = tf.string),
             args=(path,)
         )
-

@@ -474,6 +474,27 @@ class Translator(tf.Module):
 
     return reconstructed_tokens, tokens, attention_weights
 
+@tf.keras.saving.register_keras_serializable()
+class WordAutoencoderModel(tf.keras.Model):
+  def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
+    super().__init__(**kwargs)
+
+    transformer = Transformer(
+      num_layers=num_layers,
+      d_model=d_model,
+      num_heads=num_heads,
+      dff=dff,
+      input_vocab_size=grapheme_count,
+      target_vocab_size=grapheme_count,
+      dropout_rate=dropout_rate
+    )
+
+    self.translator = Translator(grapheme_idx, transformer)
+
+  def call(self, x):
+   return self.translator(x)
+
+
 if __name__=="__main__":
  with tf.device('/CPU:0'):
   home_dir = os.path.expanduser('~')
@@ -491,9 +512,25 @@ if __name__=="__main__":
  #  # text = text.map(lambda x: tft.ngrams(tokenizer.tokenize(x), 5, reduction_type=tft.Reduction.STRING_JOIN, string_separator='\x00'))
  #  # text = text.shuffle(200)
 
-  wptitles_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0.gz')
-  text = WikipediaTitlesDataset(wptitles_path)
-  text = text.map(lambda x: tokenizer.tokenize(x))
+  wptitles_train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.gz')
+  wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
+  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
+
+  train1 = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: tokenizer.tokenize(x))
+  train2 = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: tokenizer.tokenize(x))
+  valid1 = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: tokenizer.tokenize(x))
+  valid2 = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: tokenizer.tokenize(x))
+  # test= WikipediaTitlesDataset(wptitles_test_path).map(lambda x: tokenizer.tokenize(x))
+
+  # print("Splitting val/test from train...")
+  # val_and_test, train = tf.keras.utils.split_dataset(data, 1/8, 7/8)
+
+  # print("Splitting val from test...")
+  # valid, _test = tf.keras.utils.split_dataset(val_and_test, 0.5, 0.5)
+
+  # train = train.batch(BATCH)
+  # valid = valid.batch(BATCH)
+  # # test = test.batch(BATCH)
 
   num_layers = 4
   d_model = 128
@@ -504,67 +541,54 @@ if __name__=="__main__":
   grapheme_count = len(grapheme_idx)
   print(f"grapheme_count: {grapheme_count}")
 
-  transformer = Transformer(
-    num_layers=num_layers,
-    d_model=d_model,
-    num_heads=num_heads,
-    dff=dff,
-    input_vocab_size=grapheme_count ,
-    target_vocab_size=grapheme_count ,
-    dropout_rate=dropout_rate)
+ #  transformer = Transformer(
+ #    num_layers=num_layers,
+ #    d_model=d_model,
+ #    num_heads=num_heads,
+ #    dff=dff,
+ #    input_vocab_size=grapheme_count ,
+ #    target_vocab_size=grapheme_count ,
+ #    dropout_rate=dropout_rate
+ #  )
 
-  # m = WordAutoencoder(grapheme_idx.t2i.highest_idx + 1)
- # model.compile(optimizer='adam',
- #   loss='sparse_categorical_crossentropy',
- #   metrics=['accuracy'])
- # model.fit(x_train, y_train, epochs=5)
- # model.evaluate(x_test, y_test)
+ #  # m = WordAutoencoder(grapheme_idx.t2i.highest_idx + 1)
+ # # model.compile(optimizer='adam',
+ # #   loss='sparse_categorical_crossentropy',
+ # #   metrics=['accuracy'])
+ # # model.fit(x_train, y_train, epochs=5)
+ # # model.evaluate(x_test, y_test)
 
-  m = Translator(grapheme_idx, transformer)
+ #  m = Translator(grapheme_idx, transformer)
+  # def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
+  m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
 
-
-
-  it_txt = iter(text)
-  available_tokens: list[str] = list()
-  while True:
-   try:
-    txt = next(it_txt)
-    tokens = txt.to_list()[0]
-    tokens = [t.decode() for t in tokens]
-
-    available_tokens.extend(tokens)
-
-    while len(available_tokens) >= BATCH:
-     batch = available_tokens[:BATCH]
-     available_tokens = available_tokens[BATCH:]
-
-     print(f"batch len: {len(batch)}")
-     print(f"available tokens: {len(available_tokens)}")
-
-     # graphemes = [list(t) for t in batch]
-     # print(len(graphemes))
-     # print(graphemes)
-
-     # grapheme_indices, max_len = index_batch(grapheme_idx, graphemes)
-     # print(grapheme_indices)
-     # print(len(grapheme_indices))
-
-     # grapheme_indices = tf.constant(grapheme_indices, dtype=tf.int32, shape=(BATCH, max_len))
-
-     output, _, __ = m(batch)
-     print(output)
-     batch = list()
-    # # tokens = txt.to_list()[0]
-    # # graphemes = [list(t.decode()) for t in tokens]
-    # graphemes = tf.strings.split(txt, '')
-
-    # print(graphemes)
-    # grapheme_indices = grapheme_idx.index(graphemes)
-    # print(grapheme_indices)
-    # grapheme_indices = tf.ragged.constant(grapheme_indices, dtype=tf.int32)
-    # grapheme_embs = grapheme_emb(grapheme_indices)
-    # print(grapheme_embs)
+  m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+  m.fit(train1, train2, epochs=10)
+  m.evaluate(valid1, valid2)
 
 
-   except StopIteration:
-    pass
+
+  # it_txt = iter(text)
+  # available_tokens: list[str] = list()
+  # while True:
+  #  try:
+  #   txt = next(it_txt)
+  #   tokens = txt.to_list()[0]
+  #   tokens = [t.decode() for t in tokens]
+
+  #   available_tokens.extend(tokens)
+
+  #   while len(available_tokens) >= BATCH:
+  #    batch = available_tokens[:BATCH]
+  #    available_tokens = available_tokens[BATCH:]
+
+  #    print(f"batch len: {len(batch)}")
+  #    print(f"available tokens: {len(available_tokens)}")
+
+
+  #    output, _, __ = m(batch)
+  #    print(output)
+  #    batch = list()
+
+  #  except StopIteration:
+  #   pass
