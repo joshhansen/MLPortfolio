@@ -741,18 +741,13 @@ fn run_multi(
                             // Gradients for the current backward pass
                             let grads = loss.backward();
 
-                            println!("Got grads");
-
                             // Gradients linked to each parameter of the model.
                             let grads = GradientsParams::from_grads(grads, &model);
-                            println!("Got individual grads");
 
                             // Update the model using the optimizer.
                             model = optim.step(config.lr, model, grads);
 
                             tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
-
-                            println!("Stepped");
                         }
                     }
                 }
