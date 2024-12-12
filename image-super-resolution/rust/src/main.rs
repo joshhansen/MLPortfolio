@@ -26,10 +26,12 @@ use nn::{conv::Conv2dConfig, loss::MseLoss, DropoutConfig, PaddingConfig2d, Sigm
 
 type fX = f32;
 
-const W_SMALL: usize = 700;
-const H_SMALL: usize = 700;
-const W_LARGE: usize = 1400;
-const H_LARGE: usize = 1400;
+const SMALL_MIN_W: usize = 700;
+const SMALL_MIN_H: usize = 700;
+
+const LARGE_MIN_W: usize = 1400;
+const LARGE_MIN_H: usize = 1400;
+
 const INTERMEDIATE_FEATURES: usize = 16;
 
 #[derive(Parser)]
@@ -437,18 +439,18 @@ pub fn run<B: AutodiffBackend>(
 
     let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
         device: device.clone(),
-        small_min_width: W_SMALL,
-        small_min_height: H_SMALL,
-        large_min_width: W_LARGE,
-        large_min_height: H_LARGE,
+        small_min_width: SMALL_MIN_W,
+        small_min_height: SMALL_MIN_H,
+        large_min_width: LARGE_MIN_W,
+        large_min_height: LARGE_MIN_H,
         factor,
     };
     let valid_batcher: ImageSRBatcher<B::InnerBackend> = ImageSRBatcher {
         device: device.clone(),
-        small_min_width: W_SMALL,
-        small_min_height: H_SMALL,
-        large_min_width: W_LARGE,
-        large_min_height: H_LARGE,
+        small_min_width: SMALL_MIN_W,
+        small_min_height: SMALL_MIN_H,
+        large_min_width: LARGE_MIN_W,
+        large_min_height: LARGE_MIN_H,
         factor,
     };
 
@@ -683,19 +685,19 @@ fn run_multi(
         thread::spawn(move || loop {
             let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
                 device: device.clone(),
-                small_min_width: W_SMALL,
-                small_min_height: H_SMALL,
-                large_min_width: W_LARGE,
-                large_min_height: H_LARGE,
+                small_min_width: SMALL_MIN_W,
+                small_min_height: SMALL_MIN_H,
+                large_min_width: LARGE_MIN_W,
+                large_min_height: LARGE_MIN_H,
                 factor,
             };
             let valid_batcher: ImageSRBatcher<<B as AutodiffBackend>::InnerBackend> =
                 ImageSRBatcher {
                     device: device.clone(),
-                    small_min_width: W_SMALL,
-                    small_min_height: H_SMALL,
-                    large_min_width: W_LARGE,
-                    large_min_height: H_LARGE,
+                    small_min_width: SMALL_MIN_W,
+                    small_min_height: SMALL_MIN_H,
+                    large_min_width: LARGE_MIN_W,
+                    large_min_height: LARGE_MIN_H,
                     factor,
                 };
 
