@@ -188,6 +188,9 @@ impl<B: Backend> ImageSRBatcher<B> {
             return Ok(None);
         }
 
+        //TODO Crop at different offsets to augment the data
+        let img = img.crop_imm(0, 0, min_width as u32, min_height as u32);
+
         let new_w = w * factor;
         let new_h = h * factor;
 
