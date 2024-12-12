@@ -58,7 +58,22 @@ enum Commands {
         /// Moving average window for reporting
         #[arg(long, default_value_t = 100)]
         recent_window: usize,
+
+        #[arg(long, short = 'd', default_value = "0", value_parser = parse_device)]
+        dev: Vec<WgpuDevice>,
     },
+}
+
+fn parse_device(s: &str) -> Result<WgpuDevice, String> {
+    if s == "cpu" {
+        return Ok(WgpuDevice::Cpu);
+    }
+
+    let idx: usize = s
+        .parse()
+        .map_err(|_| format!("Unrecognized device: {}", s))?;
+
+    Ok(WgpuDevice::DiscreteGpu(idx))
 }
 
 struct ImageSRDataset {
@@ -802,7 +817,6 @@ fn main() -> Result<(), walkdir::Error> {
     let cli = Cli::parse();
 
     type B = Wgpu<f32, i32>;
-    let dev = Default::default();
 
     match &cli.command {
         Commands::Train {
@@ -815,9 +829,16 @@ fn main() -> Result<(), walkdir::Error> {
             epochs,
             recent_window,
             factor,
+            dev,
         } => {
+            let d = &dev[0];
+
+            if dev.len() > 1 {
+                eprintln!("Only using the first device ({:?})", d);
+            }
+
             run::<Autodiff<B>>(
-                &dev,
+                d,
                 train_small_dir,
                 train_large_dir,
                 valid_small_dir,
