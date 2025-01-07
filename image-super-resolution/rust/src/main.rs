@@ -5,7 +5,10 @@ use std::{
 };
 
 use burn::{
-    backend::{wgpu::WgpuDevice, Autodiff, Wgpu},
+    backend::{
+        wgpu::{JitBackend, WgpuDevice, WgpuRuntime},
+        Autodiff, Wgpu,
+    },
     data::{
         dataloader::{batcher::Batcher, DataLoaderBuilder},
         dataset::Dataset,
@@ -267,6 +270,7 @@ impl<B: Backend> ImageSRBatcher<B> {
         let bytes = img.into_rgb32f().into_vec();
 
         let flat_tensor: Tensor<B, 1> = Tensor::from_floats(&bytes[..], dev);
+        println!("Flat tensor shape: {:?}", flat_tensor.shape());
 
         // We know this because of the into_rgb32f() call which forces it to RGB
         let c = 3usize;
@@ -434,7 +438,10 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
         };
 
         if let Some(small) = small.as_ref() {
+            println!("small shape: {:?}", small.shape());
+
             if let Some(large) = large.as_ref() {
+                println!("large shape: {:?}", large.shape());
                 assert_eq!(small.shape().dims[0], large.shape().dims[0]);
                 assert_eq!(small.shape().dims[1], large.shape().dims[1]);
             }
@@ -544,7 +551,7 @@ pub struct ImageSRTrainingConfig {
     #[config(default = 100)]
     pub num_epochs: usize,
 
-    #[config(default = 4)]
+    #[config(default = 10)]
     pub batch_size: usize,
 
     #[config(default = 4)]
@@ -987,11 +994,11 @@ fn main() -> Result<(), walkdir::Error> {
             dev,
         } => {
             let d = &dev[0];
-            // type B = JitBackend<WgpuRuntime, f32, i32>;
+            type B = JitBackend<WgpuRuntime, f32, i32>;
 
             // burn::backend::wgpu::init_sync::<burn::backend::wgpu::OpenGl>(d, Default::default());
 
-            type B = Wgpu<f32, i32>;
+            // type B = Wgpu<f32, i32>;
 
             if dev.len() > 1 {
                 eprintln!("Only using the first device ({:?})", d);
