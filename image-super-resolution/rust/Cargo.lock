@@ -2105,6 +2105,7 @@ dependencies = [
  "burn",
  "clap",
  "image",
+ "rand",
  "walkdir",
 ]
 

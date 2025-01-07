@@ -7,4 +7,5 @@ edition = "2021"
 burn = { version = "0.15.0", features = ["autodiff", "dataset", "fusion", "wgpu"] }
 clap = { version = "4.5.21", features = ["derive"] }
 image = "0.25.5"
+rand = "0.8.5"
 walkdir = "2.5.0"
