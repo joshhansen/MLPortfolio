@@ -408,6 +408,7 @@ class Translator(tf.Module):
 
   # tokens: list of strings of shape (batch,)
   def __call__(self, tokens: list[str], int_dtype=tf.int64):
+    print(tokens)
     grapheme_indices = self.grapheme_idx.index_tokens(tokens)
     max_len = max([len(t) for t in grapheme_indices])
     grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
@@ -494,6 +495,9 @@ class WordAutoencoderModel(tf.keras.Model):
   def call(self, x):
    return self.translator(x)
 
+def titles_datum_extractor(title, tokenizer):
+ tokens = tokenizer.tokenize(title)
+ return (tokens, tokens)# return as x and y as this is an autoencoder
 
 if __name__=="__main__":
  with tf.device('/CPU:0'):
@@ -516,10 +520,8 @@ if __name__=="__main__":
   wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
   # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
 
-  train1 = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: tokenizer.tokenize(x))
-  train2 = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: tokenizer.tokenize(x))
-  valid1 = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: tokenizer.tokenize(x))
-  valid2 = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: tokenizer.tokenize(x))
+  train = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: titles_datum_extractor(x, tokenizer))
+  valid = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: titles_datum_extractor(x, tokenizer))
   # test= WikipediaTitlesDataset(wptitles_test_path).map(lambda x: tokenizer.tokenize(x))
 
   # print("Splitting val/test from train...")
@@ -563,8 +565,8 @@ if __name__=="__main__":
   m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
 
   m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-  m.fit(train1, train2, epochs=10)
-  m.evaluate(valid1, valid2)
+  m.fit(train, epochs=10)
+  m.evaluate(valid)
 
 
 
