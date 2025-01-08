@@ -408,7 +408,7 @@ class Translator(tf.Module):
 
   # tokens: list of strings of shape (batch,)
   def __call__(self, tokens: list[str], int_dtype=tf.int64):
-    print(tokens)
+    print(f"Translator tokens: {tokens}")
     grapheme_indices = self.grapheme_idx.index_tokens(tokens)
     max_len = max([len(t) for t in grapheme_indices])
     grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
@@ -496,7 +496,9 @@ class WordAutoencoderModel(tf.keras.Model):
    return self.translator(x)
 
 def titles_datum_extractor(title, tokenizer):
+ print(f"titles_datum_extractor title {title}")
  tokens = tokenizer.tokenize(title)
+ print(f"titles_datum_extractor tokens {tokens}")
  return (tokens, tokens)# return as x and y as this is an autoencoder
 
 if __name__=="__main__":
@@ -566,7 +568,7 @@ if __name__=="__main__":
 
   m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
   m.fit(train, epochs=10)
-  m.evaluate(valid)
+  # m.evaluate(valid)
 
 
 

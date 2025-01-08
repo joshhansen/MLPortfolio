@@ -9,17 +9,20 @@ def normalize(s: str):
 
 class WikipediaTitlesDataset(tf.data.Dataset):
     def _generator(path: Path):
+        print(f"WPTD initializing for {path}")
         with gzip.open(path, 'rt') as r:
             it = iter(r)
 
             _header = next(it)
 
             for line in it:
-                yield tf.constant([normalize(line)], dtype=tf.string, shape=(1,))
+                normalized = normalize(line)
+                print(f"WPTD normalized {normalized}")
+                yield tf.constant(normalized, dtype=tf.string, shape=(None,))
 
     def __new__(cls, path: Path):
         return tf.data.Dataset.from_generator(
             cls._generator,
-            output_signature = tf.TensorSpec(shape = (1,), dtype = tf.string),
+            output_signature = tf.TensorSpec(shape = (None,), dtype = tf.string),
             args=(path,)
         )
