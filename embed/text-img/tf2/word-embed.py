@@ -17,8 +17,8 @@ def flatten(xss):
  return [x for xs in xss for x in xs]
 
 def pad(a: list[int], pad: int, pad_to: int) -> list[int]:
- print(f"a: {a}")
- print(f"pad_to: {pad_to}")
+ # print(f"a: {a}")
+ # print(f"pad_to: {pad_to}")
  return a + [pad] * (pad_to- len(a))
 
 # def index_batch(grapheme_idx: T2I, batched_token_graphemes: list[list[str]]):
@@ -300,8 +300,8 @@ class Decoder(tf.keras.layers.Layer):
   self.last_attn_scores = None
 
  def call(self, x: tf.Tensor, context: tf.Tensor):
-  print(f"Decoder x.get_shape: {x.get_shape()}")
-  print(f"Decoder context.get_shape: {context.get_shape()}")
+  # print(f"Decoder x.get_shape: {x.get_shape()}")
+  # print(f"Decoder context.get_shape: {context.get_shape()}")
   # `x` is token-IDs shape (batch, target_seq_len)
   x = self.pos_embedding(x)  # (batch_size, target_seq_len, d_model)
 
@@ -336,21 +336,21 @@ class Transformer(tf.keras.Model):
   # first argument.
   context, x  = inputs
 
-  print(f"Transformer x.get_shape: {x.get_shape()}")
-  print(f"Transformer context.get_shape: {context.get_shape()}")
+  # print(f"Transformer x.get_shape: {x.get_shape()}")
+  # print(f"Transformer context.get_shape: {context.get_shape()}")
 
   context = self.encoder(context)  # (batch_size, context_len, d_model)
 
-  print(f"Transformer context.get_shape 2: {context.get_shape()}")
+  # print(f"Transformer context.get_shape 2: {context.get_shape()}")
 
   x = self.decoder(x, context)  # (batch_size, target_len, d_model)
 
-  print(f"Transformer x.get_shape 2: {x.get_shape()}")
+  # print(f"Transformer x.get_shape 2: {x.get_shape()}")
 
   # Final linear layer output.
   logits = self.final_layer(x)  # (batch_size, target_len, target_vocab_size)
 
-  print(f"Transformer logits.get_shape: {logits.get_shape()}")
+  # print(f"Transformer logits.get_shape: {logits.get_shape()}")
 
   try:
     # Drop the keras mask, so it doesn't scale the losses/metrics.
@@ -406,35 +406,40 @@ class Translator(tf.Module):
    self.grapheme_idx = grapheme_idx
    self.transformer = transformer
 
-  # batch_size: the length of the 
-  # tokens: list of strings of shape (batch,)
-  def __call__(self, tokens: tf.RaggedTensor, int_dtype=tf.int64):
+  # tokens: shape (batch, grapheme)
+  def __call__(self, tokens: tf.Tensor, int_dtype=tf.int64):
+    print(f"Translator tokens shape: {tokens.shape}")
     print(f"Translator tokens: {tokens}")
     print(f"Translator tokens type: {type(tokens)}")
-
     print(f"Translator eager? {tf.executing_eagerly()}")
-    # grapheme_indices = self.grapheme_idx.index_tokens(tokens)
-    # max_len = max([len(t) for t in grapheme_indices])
-    # grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
-    # encoder_input = grapheme_indices
     encoder_input = tokens
 
     batch_size = tokens.get_shape()[0]
-    print(f"Translator batch_size: {batch_size}")
+    grapheme_count = len(self.grapheme_idx)
 
     # Initialize the output with a start token, and prep the end token
     starts = tf.constant([self.grapheme_idx.start_idx()] * batch_size, dtype=int_dtype)
-    end = tf.constant(self.grapheme_idx.end_idx(), dtype=int_dtype)
+    # end = tf.constant([self.grapheme_idx.end_idx()] * batch_size, dtype=int_dtype)
 
     # `tf.TensorArray` is required here (instead of a Python list), so that the
     # dynamic-loop can be traced by `tf.function`.
     output_array = tf.TensorArray(dtype=int_dtype, size=0, dynamic_size=True)
     output_array = output_array.write(0, starts)
 
-    for i in tf.range(MAX_STR_LEN):
+    probs_array = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+
+    # insert one-hot probabilities predicting the start token, which is given
+    # In other words, the loss function wants the matrix of probabilities considered while decoding
+    # The start token is given a probability of 1.0 since we must "decode" it as the first step
+    # So we one-hot-encode the start token index interpret it as probabilities
+    # start_probs shape: (batch_size, grapheme_count)
+    start_probs = tf.one_hot([self.grapheme_idx.start_idx()] * batch_size, grapheme_count)
+    probs_array = probs_array.write(0, start_probs)
+
+    for i in tf.range(MAX_STR_LEN+1):
       output = tf.transpose(output_array.stack())
-      print(f"Translator encoder_input.get_shape(): {encoder_input.get_shape()}")
-      print(f"Translator output.get_shape(): {output.get_shape()}")
+      # print(f"Translator encoder_input.get_shape(): {encoder_input.get_shape()}")
+      # print(f"Translator output.get_shape(): {output.get_shape()}")
       predictions = self.transformer([encoder_input, output], training=False)
 
       print(f"Translator predictions.get_shape: {predictions.get_shape()}")
@@ -445,6 +450,7 @@ class Translator(tf.Module):
       predictions = tf.squeeze(predictions, axis=1)
 
       print(f"Translator predictions.get_shape 2: {predictions.get_shape()}")
+      probs_array = probs_array.write(i+1, predictions)
 
       predicted_id = tf.argmax(predictions, axis=-1)
 
@@ -465,6 +471,7 @@ class Translator(tf.Module):
 
       #TODO early exit if all outputs have emitted an end token
 
+    # output_array = output_array.write(MAX_STR_LEN+1, end)
     output = tf.transpose(output_array.stack())
 
     print(f"Translator output.get_shape: {output.get_shape()}")
@@ -481,7 +488,14 @@ class Translator(tf.Module):
     self.transformer([encoder_input, output[:,:-1]], training=False)
     attention_weights = self.transformer.decoder.last_attn_scores
 
-    return reconstructed_tokens, tokens, attention_weights
+    
+    probs = probs_array.stack()
+    print(f"probs shape: {probs.get_shape()}")
+
+    probs = tf.transpose(probs, [1, 0, 2])
+    print(f"probs shape 2: {probs.get_shape()}")
+
+    return reconstructed_tokens, tokens, attention_weights, probs
 
 # @tf.keras.saving.register_keras_serializable()
 class WordAutoencoderModel(tf.keras.Model):
@@ -500,14 +514,26 @@ class WordAutoencoderModel(tf.keras.Model):
 
     self.translator = Translator(grapheme_idx, transformer)
 
-  def call(self, x):
-   return self.translator(x)
+  def call(self, x: tf.Tensor):
+   reconstructed_tokens, tokens, attention_weights, probs = self.translator(x)
 
-def titles_datum_extractor(title, tokenizer):
- print(f"titles_datum_extractor title {title}")
- tokens = tokenizer.tokenize(title)
- print(f"titles_datum_extractor tokens {tokens}")
- return (tokens, tokens)# return as x and y as this is an autoencoder
+   print("reconstructed_tokens:")
+   for t in reconstructed_tokens:
+    print(f"\t{t}")
+   # print(f"tokens: {tokens}")
+   # print(f"attention_weights: {attention_weights}")
+   print(f"WEM reconstructed_tokens len: {len(reconstructed_tokens)}")
+   print(f"WEM tokens shape: {tokens.shape}")
+   print(f"WEM attention_weights shape: {attention_weights.shape}")
+   print(f"WEM probs shape: {probs.get_shape()}")
+
+   return probs
+
+# def titles_datum_extractor(title, tokenizer):
+ # print(f"titles_datum_extractor title {title}")
+ # tokens = tokenizer.tokenize(title)
+ # print(f"titles_datum_extractor tokens {tokens}")
+ # return (tokens, tokens)# return as x and y as this is an autoencoder
 
 # def tokenize_str(s: tf.Tensor) -> tf.RaggedTensor:
 #  print(s.numpy())
