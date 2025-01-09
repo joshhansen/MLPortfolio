@@ -557,13 +557,9 @@ if __name__=="__main__":
   train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN)
   valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN)
 
-  # train_gen = gen_wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx)
-  # valid_gen = gen_wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx)
-
-
-  # Tokenize
-  # train = train.map(tokenize)
-  # valid = valid.map(tokenize)
+  # Make the datum both input and output
+  train = train.map(lambda s: (s, s))
+  valid = valid.map(lambda s: (s, s))
 
   train_iter = iter(train)
   valid_iter = iter(valid)
