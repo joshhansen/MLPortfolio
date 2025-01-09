@@ -7,7 +7,7 @@ import tensorflow_text as tft
 
 
 from grapheme_idx import GraphemeIdx, load_grapheme_idx
-from wptitles import WikipediaTitlesDataset
+from wptitles import WikipediaTitlesDataset, wp_titles_dataset
 
 BATCH=10
 GRAPHEME_QUERY=16
@@ -61,9 +61,9 @@ class PositionalEmbedding(tf.keras.layers.Layer):
   return self.embedding.compute_mask(*args, **kwargs)
 
  def call(self, x: tf.Tensor):
-  print(f"x.get_shape: {x.get_shape()}")
+  # print(f"x.get_shape: {x.get_shape()}")
   length = x.get_shape()[1]
-  print(f"x.get_shape()[1]: {x.get_shape()[1]}")
+  # print(f"x.get_shape()[1]: {x.get_shape()[1]}")
   x = self.embedding(x)
   # This factor sets the relative scale of the embedding and positonal_encoding.
   x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -406,16 +406,24 @@ class Translator(tf.Module):
    self.grapheme_idx = grapheme_idx
    self.transformer = transformer
 
+  # batch_size: the length of the 
   # tokens: list of strings of shape (batch,)
-  def __call__(self, tokens: list[str], int_dtype=tf.int64):
+  def __call__(self, tokens: tf.RaggedTensor, int_dtype=tf.int64):
     print(f"Translator tokens: {tokens}")
-    grapheme_indices = self.grapheme_idx.index_tokens(tokens)
-    max_len = max([len(t) for t in grapheme_indices])
-    grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
-    encoder_input = grapheme_indices
+    print(f"Translator tokens type: {type(tokens)}")
+
+    print(f"Translator eager? {tf.executing_eagerly()}")
+    # grapheme_indices = self.grapheme_idx.index_tokens(tokens)
+    # max_len = max([len(t) for t in grapheme_indices])
+    # grapheme_indices = tf.constant(grapheme_indices, dtype=int_dtype, shape=(len(tokens), max_len))
+    # encoder_input = grapheme_indices
+    encoder_input = tokens
+
+    batch_size = tokens.get_shape()[0]
+    print(f"Translator batch_size: {batch_size}")
 
     # Initialize the output with a start token, and prep the end token
-    starts = tf.constant([self.grapheme_idx.start_idx()] * len(tokens), dtype=int_dtype)
+    starts = tf.constant([self.grapheme_idx.start_idx()] * batch_size, dtype=int_dtype)
     end = tf.constant(self.grapheme_idx.end_idx(), dtype=int_dtype)
 
     # `tf.TensorArray` is required here (instead of a Python list), so that the
@@ -423,7 +431,7 @@ class Translator(tf.Module):
     output_array = tf.TensorArray(dtype=int_dtype, size=0, dynamic_size=True)
     output_array = output_array.write(0, starts)
 
-    for i in tf.range(max_len):
+    for i in tf.range(MAX_STR_LEN):
       output = tf.transpose(output_array.stack())
       print(f"Translator encoder_input.get_shape(): {encoder_input.get_shape()}")
       print(f"Translator output.get_shape(): {output.get_shape()}")
@@ -475,7 +483,7 @@ class Translator(tf.Module):
 
     return reconstructed_tokens, tokens, attention_weights
 
-@tf.keras.saving.register_keras_serializable()
+# @tf.keras.saving.register_keras_serializable()
 class WordAutoencoderModel(tf.keras.Model):
   def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
     super().__init__(**kwargs)
@@ -501,11 +509,25 @@ def titles_datum_extractor(title, tokenizer):
  print(f"titles_datum_extractor tokens {tokens}")
  return (tokens, tokens)# return as x and y as this is an autoencoder
 
+# def tokenize_str(s: tf.Tensor) -> tf.RaggedTensor:
+#  print(s.numpy())
+#  # FIXME
+#  return s
+
+# titles shape: (batch,None,)
+# def tokenize(titles: tf.RaggedTensor) -> tf.RaggedTensor:
+#  print(f"titles shape: {titles.shape}")
+#  print(f"titles type: {type(titles)}")
+#  return tf.map_fn(tokenize_str, titles)
+
+MAX_STR_LEN = 16
+
 if __name__=="__main__":
  with tf.device('/CPU:0'):
+  print(f"Eager? {tf.executing_eagerly()}")
   home_dir = os.path.expanduser('~')
   text_dir = os.path.join(home_dir, 'Data', 'org', 'gutenberg', 'mirror_txt')
-  img_dir = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png_not-too-big')
+  # img_dir = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png_not-too-big')
 
   grapheme_idx = load_grapheme_idx()
   print(grapheme_idx)
@@ -514,6 +536,9 @@ if __name__=="__main__":
 
   # tokenizer = tft.UnicodeScriptTokenizer()
   tokenizer = tft.WhitespaceTokenizer()
+  def tokenize(s: str):
+   return tokenizer.tokenize(s)
+  
  #  # text = GutenbergTextDataset(text_dir)
  #  # text = text.map(lambda x: tft.ngrams(tokenizer.tokenize(x), 5, reduction_type=tft.Reduction.STRING_JOIN, string_separator='\x00'))
  #  # text = text.shuffle(200)
@@ -522,19 +547,37 @@ if __name__=="__main__":
   wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
   # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
 
-  train = WikipediaTitlesDataset(wptitles_train_path).map(lambda x: titles_datum_extractor(x, tokenizer))
-  valid = WikipediaTitlesDataset(wptitles_valid_path).map(lambda x: titles_datum_extractor(x, tokenizer))
+  # train = tf.data.TextLineDataset(wptitles_train_path, compression_type='GZIP')
+  # valid = tf.data.TextLineDataset(wptitles_valid_path, compression_type='GZIP')
+
+  # train = WikipediaTitlesDataset(wptitles_train_path)
+  # valid = WikipediaTitlesDataset(wptitles_valid_path)
   # test= WikipediaTitlesDataset(wptitles_test_path).map(lambda x: tokenizer.tokenize(x))
 
-  # print("Splitting val/test from train...")
-  # val_and_test, train = tf.keras.utils.split_dataset(data, 1/8, 7/8)
+  train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN)
+  valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN)
 
-  # print("Splitting val from test...")
-  # valid, _test = tf.keras.utils.split_dataset(val_and_test, 0.5, 0.5)
+  # train_gen = gen_wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx)
+  # valid_gen = gen_wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx)
 
-  # train = train.batch(BATCH)
-  # valid = valid.batch(BATCH)
-  # # test = test.batch(BATCH)
+
+  # Tokenize
+  # train = train.map(tokenize)
+  # valid = valid.map(tokenize)
+
+  train_iter = iter(train)
+  valid_iter = iter(valid)
+  print(f"First train: {next(train_iter)}")
+  print(f"First valid: {next(valid_iter)}")
+
+  train = train.ragged_batch(BATCH, drop_remainder=True)
+  valid = valid.ragged_batch(BATCH, drop_remainder=True)
+  # test = test.batch(BATCH)
+
+  train_iter = iter(train)
+  valid_iter = iter(valid)
+  print(f"First train batch: {next(train_iter)}")
+  print(f"First valid batch: {next(valid_iter)}")
 
   num_layers = 4
   d_model = 128
@@ -566,7 +609,7 @@ if __name__=="__main__":
   # def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
   m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
 
-  m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+  m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'], run_eagerly=True)
   m.fit(train, epochs=10)
   # m.evaluate(valid)
 
