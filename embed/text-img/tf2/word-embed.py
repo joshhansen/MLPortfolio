@@ -520,7 +520,7 @@ def titles_datum_extractor(title, tokenizer):
 #  print(f"titles type: {type(titles)}")
 #  return tf.map_fn(tokenize_str, titles)
 
-MAX_STR_LEN = 16
+MAX_STR_LEN = 32
 
 if __name__=="__main__":
  with tf.device('/CPU:0'):
