@@ -24,7 +24,7 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
             trunc = normalized[:token_truncate_len]
             print(f"WPTD trunc {trunc}")
 
-            grapheme_indices = grapheme_idx.index_tokens([trunc], pad_to=token_truncate_len)
+            grapheme_indices = grapheme_idx.index_token(trunc, pad_to_token_len=token_truncate_len)
             
             print(f"WPTD grapheme_indices: {grapheme_indices}")
             # tokens = tokenizer.tokenize(trunc)
@@ -44,7 +44,7 @@ def wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, grapheme_i
     gen = lambda: _gen_wp_titles_dataset(path, tokenizer, grapheme_idx, token_truncate_len)
     return tf.data.Dataset.from_generator(
         gen,
-        output_signature = tf.TensorSpec(shape=(None,token_truncate_len+2,), dtype=tf.int32),
+        output_signature = tf.TensorSpec(shape=(token_truncate_len+2,), dtype=tf.int32),
     )
     
 class WikipediaTitlesDataset(tf.data.Dataset):

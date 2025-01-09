@@ -570,8 +570,8 @@ if __name__=="__main__":
   print(f"First train: {next(train_iter)}")
   print(f"First valid: {next(valid_iter)}")
 
-  train = train.ragged_batch(BATCH, drop_remainder=True)
-  valid = valid.ragged_batch(BATCH, drop_remainder=True)
+  train = train.batch(BATCH, drop_remainder=True)
+  valid = valid.batch(BATCH, drop_remainder=True)
   # test = test.batch(BATCH)
 
   train_iter = iter(train)
