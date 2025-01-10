@@ -7,7 +7,7 @@ import tensorflow_text as tft
 
 
 from grapheme_idx import GraphemeIdx, load_grapheme_idx
-from wptitles import WikipediaTitlesDataset, wp_titles_dataset
+from wptitles import wp_titles_dataset
 
 BATCH=10
 GRAPHEME_QUERY=16
@@ -209,77 +209,77 @@ class DecoderLayer(tf.keras.layers.Layer):
   x = self.ffn(x)  # Shape `(batch_size, seq_len, d_model)`.
   return x 
 
-class DecoderOld(tf.keras.layers.Layer):
-  @classmethod
-  def add_method(cls, fun):
-    setattr(cls, fun.__name__, fun)
-    return fun
+# class DecoderOld(tf.keras.layers.Layer):
+#   @classmethod
+#   def add_method(cls, fun):
+#     setattr(cls, fun.__name__, fun)
+#     return fun
 
-  def __init__(self, grapheme_count: int, units: int):
-    # super(Decoder, self).__init__()
-    # self.text_processor = text_processor
-    # self.vocab_size = text_processor.vocabulary_size()
-    # self.word_to_id = tf.keras.layers.StringLookup(
-    #     vocabulary=text_processor.get_vocabulary(),
-    #     mask_token='', oov_token='[UNK]')
-    # self.id_to_word = tf.keras.layers.StringLookup(
-    #     vocabulary=text_processor.get_vocabulary(),
-    #     mask_token='', oov_token='[UNK]',
-    #     invert=True)
-    # self.start_token = self.word_to_id('[START]')
-    # self.end_token = self.word_to_id('[END]')
+#   def __init__(self, grapheme_count: int, units: int):
+#     # super(Decoder, self).__init__()
+#     # self.text_processor = text_processor
+#     # self.vocab_size = text_processor.vocabulary_size()
+#     # self.word_to_id = tf.keras.layers.StringLookup(
+#     #     vocabulary=text_processor.get_vocabulary(),
+#     #     mask_token='', oov_token='[UNK]')
+#     # self.id_to_word = tf.keras.layers.StringLookup(
+#     #     vocabulary=text_processor.get_vocabulary(),
+#     #     mask_token='', oov_token='[UNK]',
+#     #     invert=True)
+#     # self.start_token = self.word_to_id('[START]')
+#     # self.end_token = self.word_to_id('[END]')
 
-    # self.units = units
+#     # self.units = units
 
 
-    # # 1. The embedding layer converts token IDs to vectors
-    # self.embedding = tf.keras.layers.Embedding(self.vocab_size,
-    #                                            units, mask_zero=True)
+#     # # 1. The embedding layer converts token IDs to vectors
+#     # self.embedding = tf.keras.layers.Embedding(self.vocab_size,
+#     #                                            units, mask_zero=True)
 
-    # 2. The RNN keeps track of what's been generated so far.
-    self.rnn = tf.keras.layers.GRU(units,
-                                   return_sequences=True,
-                                   return_state=True,
-                                   recurrent_initializer='glorot_uniform')
+#     # 2. The RNN keeps track of what's been generated so far.
+#     self.rnn = tf.keras.layers.GRU(units,
+#                                    return_sequences=True,
+#                                    return_state=True,
+#                                    recurrent_initializer='glorot_uniform')
 
-    # 3. The RNN output will be the query for the attention layer.
-    self.attention = CrossAttention(units)
+#     # 3. The RNN output will be the query for the attention layer.
+#     self.attention = CrossAttention(units)
 
-    # 4. This fully connected layer produces the logits for each
-    # output grapheme.
-    self.output_layer = tf.keras.layers.Dense(grapheme_count)
+#     # 4. This fully connected layer produces the logits for each
+#     # output grapheme.
+#     self.output_layer = tf.keras.layers.Dense(grapheme_count)
 
-    @Decoder.add_method
-    def call(self,
-             token_emb,
-             state=None,
-             return_state=False):  
-      # shape_checker = ShapeChecker()
-      # shape_checker(x, 'batch t')
-      # shape_checker(context, 'batch s units')
+#     @Decoder.add_method
+#     def call(self,
+#              token_emb,
+#              state=None,
+#              return_state=False):  
+#       # shape_checker = ShapeChecker()
+#       # shape_checker(x, 'batch t')
+#       # shape_checker(context, 'batch s units')
 
-      # # 1. Lookup the embeddings
-      # x = self.embedding(x)
-      # shape_checker(x, 'batch t units')
+#       # # 1. Lookup the embeddings
+#       # x = self.embedding(x)
+#       # shape_checker(x, 'batch t units')
 
-      # 2. Process the target sequence.
-      x, state = self.rnn(token_emb)
-      shape_checker(x, 'batch t units')
+#       # 2. Process the target sequence.
+#       x, state = self.rnn(token_emb)
+#       shape_checker(x, 'batch t units')
 
-      # 3. Use the RNN output as the query for the attention over the context.
-      x = self.attention(x, context)
-      self.last_attention_weights = self.attention.last_attention_weights
-      # shape_checker(x, 'batch t units')
-      # shape_checker(self.last_attention_weights, 'batch t s')
+#       # 3. Use the RNN output as the query for the attention over the context.
+#       x = self.attention(x, context)
+#       self.last_attention_weights = self.attention.last_attention_weights
+#       # shape_checker(x, 'batch t units')
+#       # shape_checker(self.last_attention_weights, 'batch t s')
 
-      # Step 4. Generate logit predictions for the next token.
-      logits = self.output_layer(x)
-      shape_checker(logits, 'batch t target_vocab_size')
+#       # Step 4. Generate logit predictions for the next token.
+#       logits = self.output_layer(x)
+#       shape_checker(logits, 'batch t target_vocab_size')
 
-      if return_state:
-        return logits, state
-      else:
-        return logits
+#       if return_state:
+#         return logits, state
+#       else:
+#         return logits
 
 class Decoder(tf.keras.layers.Layer):
  def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
@@ -370,10 +370,10 @@ class Translator(tf.Module):
 
   # tokens: shape (batch, grapheme)
   def __call__(self, tokens: tf.Tensor, int_dtype=tf.int64):
-    print(f"Translator tokens shape: {tokens.shape}")
-    print(f"Translator tokens: {tokens}")
-    print(f"Translator tokens type: {type(tokens)}")
-    print(f"Translator eager? {tf.executing_eagerly()}")
+    # print(f"Translator tokens shape: {tokens.shape}")
+    # print(f"Translator tokens: {tokens}")
+    # print(f"Translator tokens type: {type(tokens)}")
+    # print(f"Translator eager? {tf.executing_eagerly()}")
     encoder_input = tokens
 
     batch_size = tokens.get_shape()[0]
@@ -403,19 +403,19 @@ class Translator(tf.Module):
       # print(f"Translator output.get_shape(): {output.get_shape()}")
       predictions = self.transformer([encoder_input, output], training=False)
 
-      print(f"Translator predictions.get_shape: {predictions.get_shape()}")
+      # print(f"Translator predictions.get_shape: {predictions.get_shape()}")
 
       # Select the last token from the `seq_len` dimension.
       predictions = predictions[:, -1:, :]  # Shape `(batch_size, 1, vocab_size)`.
 
       predictions = tf.squeeze(predictions, axis=1)
 
-      print(f"Translator predictions.get_shape 2: {predictions.get_shape()}")
+      # print(f"Translator predictions.get_shape 2: {predictions.get_shape()}")
       probs_array = probs_array.write(i+1, predictions)
 
       predicted_id = tf.argmax(predictions, axis=-1)
 
-      print(f"Translator predicted_id.get_shape: {predicted_id.get_shape()}")
+      # print(f"Translator predicted_id.get_shape: {predicted_id.get_shape()}")
 
       # Concatenate the `predicted_id` to the output which is given to the
       # decoder as its input.
@@ -423,7 +423,7 @@ class Translator(tf.Module):
 
     output = tf.transpose(output_array.stack())
 
-    print(f"Translator output.get_shape: {output.get_shape()}")
+    # print(f"Translator output.get_shape: {output.get_shape()}")
 
     # The output shape is `(1, tokens)`.
     # text = tokenizers.en.detokenize(output)[0]  # Shape: `()`.
@@ -439,10 +439,10 @@ class Translator(tf.Module):
 
     
     probs = probs_array.stack()
-    print(f"probs shape: {probs.get_shape()}")
+    # print(f"probs shape: {probs.get_shape()}")
 
     probs = tf.transpose(probs, [1, 0, 2])
-    print(f"probs shape 2: {probs.get_shape()}")
+    # print(f"probs shape 2: {probs.get_shape()}")
 
     return reconstructed_tokens, tokens, attention_weights, probs
 
@@ -464,25 +464,31 @@ class WordAutoencoderModel(tf.keras.Model):
     self.translator = Translator(grapheme_idx, transformer)
 
   def call(self, x: tf.Tensor):
+   tokens_as_text = self.translator.grapheme_idx.unindex_tokens(x.numpy())
    reconstructed_tokens, tokens, attention_weights, probs = self.translator(x)
+
+   print("tokens_as_text:")
+   for t in tokens_as_text:
+    print(f"\t{t}")
 
    print("reconstructed_tokens:")
    for t in reconstructed_tokens:
     print(f"\t{t}")
    # print(f"tokens: {tokens}")
    # print(f"attention_weights: {attention_weights}")
-   print(f"WEM reconstructed_tokens len: {len(reconstructed_tokens)}")
-   print(f"WEM tokens shape: {tokens.shape}")
-   print(f"WEM attention_weights shape: {attention_weights.shape}")
-   print(f"WEM probs shape: {probs.get_shape()}")
+   # print(f"WEM reconstructed_tokens len: {len(reconstructed_tokens)}")
+   # print(f"WEM tokens shape: {tokens.shape}")
+   # print(f"WEM attention_weights shape: {attention_weights.shape}")
+   # print(f"WEM probs shape: {probs.get_shape()}")
 
    return probs
 
 MAX_STR_LEN = 32
 
 if __name__=="__main__":
- with tf.device('/CPU:0'):
-  print(f"Eager? {tf.executing_eagerly()}")
+ # with tf.device('/CPU:0'):
+ with tf.device('gpu'):
+  # print(f"Eager? {tf.executing_eagerly()}")
   home_dir = os.path.expanduser('~')
   text_dir = os.path.join(home_dir, 'Data', 'org', 'gutenberg', 'mirror_txt')
   # img_dir = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png_not-too-big')

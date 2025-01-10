@@ -19,14 +19,14 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
 
         for line in it:
             normalized = normalize(line)
-            print(f"WPTD normalized {normalized}")
+            # print(f"WPTD normalized {normalized}")
 
             trunc = normalized[:token_truncate_len]
-            print(f"WPTD trunc {trunc}")
+            # print(f"WPTD trunc {trunc}")
 
             grapheme_indices = grapheme_idx.index_token(trunc, pad_to_token_len=token_truncate_len, use_unk=True)
             
-            print(f"WPTD grapheme_indices: {grapheme_indices}")
+            # print(f"WPTD grapheme_indices: {grapheme_indices}")
             # tokens = tokenizer.tokenize(trunc)
             # print(f"WPTD tokens {tokens}")
             # print(f"WPTD token type: {type(tokens[0])}")
@@ -44,57 +44,57 @@ def wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, grapheme_i
         output_signature = tf.TensorSpec(shape=(token_truncate_len+2,), dtype=tf.int32),
     )
     
-class WikipediaTitlesDataset(tf.data.Dataset):
-    def _generator(path: Path):
-        print(f"WPTD initializing for {path}")
-        with gzip.open(path, 'rt') as r:
-            it = iter(r)
+# class WikipediaTitlesDataset(tf.data.Dataset):
+#     def _generator(path: Path):
+#         print(f"WPTD initializing for {path}")
+#         with gzip.open(path, 'rt') as r:
+#             it = iter(r)
 
-            _header = next(it)
+#             _header = next(it)
 
-            for line in it:
-                normalized = normalize(line)
-                print(f"WPTD normalized {normalized}")
-                yield normalized
-                # yield tf.constant(normalized, dtype=tf.string)
+#             for line in it:
+#                 normalized = normalize(line)
+#                 # print(f"WPTD normalized {normalized}")
+#                 yield normalized
+#                 # yield tf.constant(normalized, dtype=tf.string)
 
-    def __new__(cls, path: Path):
-        return tf.data.Dataset.from_generator(
-            cls._generator,
-            output_signature = tf.TensorSpec(shape = (), dtype = tf.string),
-            args=(path,)
-        )
+#     def __new__(cls, path: Path):
+#         return tf.data.Dataset.from_generator(
+#             cls._generator,
+#             output_signature = tf.TensorSpec(shape = (), dtype = tf.string),
+#             args=(path,)
+#         )
 
-class WikipediaTitlesTokenizedDataset(tf.data.Dataset):
-    def _generator(path: Path, tokenizer: tft.WhitespaceTokenizer):
-        print(f"WPTID initializing for {path}")
-        titles = WikipediaTitlesDataset(path)
-        for title in titles:
-            title_s = title.numpy()
-            print(f"title_s: {title_s}")
+# class WikipediaTitlesTokenizedDataset(tf.data.Dataset):
+#     def _generator(path: Path, tokenizer: tft.WhitespaceTokenizer):
+#         print(f"WPTID initializing for {path}")
+#         titles = WikipediaTitlesDataset(path)
+#         for title in titles:
+#             title_s = title.numpy()
+#             print(f"title_s: {title_s}")
 
-            yield title
+#             yield title
 
-    def __new__(cls, path: Path, tokenizer: tft.WhitespaceTokenizer):
-        return tf.data.Dataset.from_generator(
-            cls._generator,
-            output_signature = tf.RaggedTensorSpec(shape = (None,None,), dtype = tf.string),
-            args=(path, tokenizer,)
-        )
+#     def __new__(cls, path: Path, tokenizer: tft.WhitespaceTokenizer):
+#         return tf.data.Dataset.from_generator(
+#             cls._generator,
+#             output_signature = tf.RaggedTensorSpec(shape = (None,None,), dtype = tf.string),
+#             args=(path, tokenizer,)
+#         )
 
-class WikipediaTitlesTokenizedIndexedDataset(tf.data.Dataset):
-    def _generator(path: Path, grapheme_idx: GraphemeIdx):
-        print(f"WPTID initializing for {path}")
-        titles = WikipediaTitlesDataset(path)
-        for title in titles:
-            title_s = title.numpy()
-            print(f"title_s: {title_s}")
+# class WikipediaTitlesTokenizedIndexedDataset(tf.data.Dataset):
+#     def _generator(path: Path, grapheme_idx: GraphemeIdx):
+#         print(f"WPTID initializing for {path}")
+#         titles = WikipediaTitlesDataset(path)
+#         for title in titles:
+#             title_s = title.numpy()
+#             print(f"title_s: {title_s}")
 
-            yield title
+#             yield title
 
-    def __new__(cls, path: Path, grapheme_idx: GraphemeIdx):
-        return tf.data.Dataset.from_generator(
-            cls._generator,
-            output_signature = tf.TensorSpec(shape = (None,), dtype = tf.string),
-            args=(path, grapheme_idx,)
-        )
+#     def __new__(cls, path: Path, grapheme_idx: GraphemeIdx):
+#         return tf.data.Dataset.from_generator(
+#             cls._generator,
+#             output_signature = tf.TensorSpec(shape = (None,), dtype = tf.string),
+#             args=(path, grapheme_idx,)
+#         )
