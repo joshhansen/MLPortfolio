@@ -534,3 +534,4 @@ if __name__=="__main__":
 
   m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'], run_eagerly=True)
   m.fit(train, epochs=10)
+  m.evaluate(valid)
