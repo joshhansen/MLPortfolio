@@ -13,27 +13,6 @@ BATCH=10
 GRAPHEME_QUERY=16
 EMBED = 64
 
-# def flatten(xss):
-#  return [x for xs in xss for x in xs]
-
-# def pad(a: list[int], pad: int, pad_to: int) -> list[int]:
-#  # print(f"a: {a}")
-#  # print(f"pad_to: {pad_to}")
-#  return a + [pad] * (pad_to- len(a))
-
-# def index_batch(grapheme_idx: T2I, batched_token_graphemes: list[list[str]]):
-#  pad_idx = grapheme_idx.index(grapheme_idx.pad_token)[0]
-#  print(f"pad: {pad_idx}")
-#  print(f"batched_token_graphemes: {batched_token_graphemes}")
-
-#  max_len = max([len(t) for t in batched_token_graphemes])
-#  indices = [flatten(grapheme_idx.index(graphemes)) for graphemes in batched_token_graphemes]
-#  print(f"indices: {indices}")
-#  # indices = [x[0] for x in indices]
-#  # print(f"indices2: {indices}")
-#  padded = [pad(token_grapheme_indices, pad_idx, max_len) for token_grapheme_indices in indices]
-#  print(f"padded: {padded}")
-#  return padded, max_len
 
 def positional_encoding(length, depth):
   depth = depth/2
@@ -70,6 +49,7 @@ class PositionalEmbedding(tf.keras.layers.Layer):
   x = x + self.pos_encoding[tf.newaxis, :length, :]
   return x
 
+# multi-head attention + layernorm + residual connection
 class BaseAttention(tf.keras.layers.Layer):
  def __init__(self, **kwargs):
   super().__init__()
@@ -78,7 +58,7 @@ class BaseAttention(tf.keras.layers.Layer):
   self.add = tf.keras.layers.Add()
 
 class CrossAttention(BaseAttention):
- def call(self, x, context):
+ def call(self, x: tf.Tensor, context: tf.Tensor):
   attn_output, attn_scores = self.mha(
       query=x,
       key=context,
@@ -94,7 +74,7 @@ class CrossAttention(BaseAttention):
   return x
 
 class GlobalSelfAttention(BaseAttention):
- def call(self, x):
+ def call(self, x: tf.Tensor):
   attn_output = self.mha(
       query=x,
       value=x,
@@ -104,7 +84,7 @@ class GlobalSelfAttention(BaseAttention):
   return x
 
 class CausalSelfAttention(BaseAttention):
- def call(self, x):
+ def call(self, x: tf.Tensor):
   attn_output = self.mha(
       query=x,
       value=x,
@@ -125,7 +105,7 @@ class FeedForward(tf.keras.layers.Layer):
   self.add = tf.keras.layers.Add()
   self.layer_norm = tf.keras.layers.LayerNormalization()
 
- def call(self, x):
+ def call(self, x: tf.Tensor):
   x = self.add([x, self.seq(x)])
   x = self.layer_norm(x) 
   return x
@@ -141,7 +121,7 @@ class EncoderLayer(tf.keras.layers.Layer):
 
   self.ffn = FeedForward(d_model, dff)
 
- def call(self, x):
+ def call(self, x: tf.Tensor):
   x = self.self_attention(x)
   x = self.ffn(x)
   return x
@@ -199,7 +179,7 @@ class DecoderLayer(tf.keras.layers.Layer):
 
   self.ffn = FeedForward(d_model, dff)
 
- def call(self, x, context):
+ def call(self, x: tf.Tensor, context: tf.Tensor):
   x = self.causal_self_attention(x=x)
   x = self.cross_attention(x=x, context=context)
 
@@ -331,26 +311,30 @@ class Transformer(tf.keras.Model):
 
   self.final_layer = tf.keras.layers.Dense(target_vocab_size)
 
- def call(self, inputs):
+ def call(self, inputs, *args, **kwargs):
+  print(f"Transformer inputs: {inputs}")
+  print(f"Transformer inputs shape: {inputs.get_shape()}")
+  print(f"Transformer args: {args}")
+  print(f"Transformer kwargs: {kwargs}")
   # To use a Keras model with `.fit` you must pass all your inputs in the
   # first argument.
   context, x  = inputs
 
-  # print(f"Transformer x.get_shape: {x.get_shape()}")
-  # print(f"Transformer context.get_shape: {context.get_shape()}")
+  print(f"Transformer x.get_shape: {x.get_shape()}")
+  print(f"Transformer context.get_shape: {context.get_shape()}")
 
   context = self.encoder(context)  # (batch_size, context_len, d_model)
 
-  # print(f"Transformer context.get_shape 2: {context.get_shape()}")
+  print(f"Transformer context.get_shape 2: {context.get_shape()}")
 
   x = self.decoder(x, context)  # (batch_size, target_len, d_model)
 
-  # print(f"Transformer x.get_shape 2: {x.get_shape()}")
+  print(f"Transformer x.get_shape 2: {x.get_shape()}")
 
   # Final linear layer output.
   logits = self.final_layer(x)  # (batch_size, target_len, target_vocab_size)
 
-  # print(f"Transformer logits.get_shape: {logits.get_shape()}")
+  print(f"Transformer logits.get_shape: {logits.get_shape()}")
 
   try:
     # Drop the keras mask, so it doesn't scale the losses/metrics.
@@ -464,6 +448,7 @@ class WordAutoencoderModel(tf.keras.Model):
     self.translator = Translator(grapheme_idx, transformer)
 
   def call(self, x: tf.Tensor):
+   print(f"WEM x shape: {x.get_shape()}")
    tokens_as_text = self.translator.grapheme_idx.unindex_tokens(x.numpy())
    reconstructed_tokens, tokens, attention_weights, probs = self.translator(x)
 
@@ -474,16 +459,53 @@ class WordAutoencoderModel(tf.keras.Model):
    print("reconstructed_tokens:")
    for t in reconstructed_tokens:
     print(f"\t{t}")
-   # print(f"tokens: {tokens}")
-   # print(f"attention_weights: {attention_weights}")
-   # print(f"WEM reconstructed_tokens len: {len(reconstructed_tokens)}")
-   # print(f"WEM tokens shape: {tokens.shape}")
-   # print(f"WEM attention_weights shape: {attention_weights.shape}")
-   # print(f"WEM probs shape: {probs.get_shape()}")
 
    return probs
 
 MAX_STR_LEN = 32
+
+def masked_loss(label, pred):
+  mask = label != 0
+  loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
+    from_logits=True, reduction='none')
+  loss = loss_object(label, pred)
+
+  mask = tf.cast(mask, dtype=loss.dtype)
+  loss *= mask
+
+  loss = tf.reduce_sum(loss)/tf.reduce_sum(mask)
+  return loss
+
+
+def masked_accuracy(label, pred):
+  pred = tf.argmax(pred, axis=2)
+  label = tf.cast(label, pred.dtype)
+  match = label == pred
+
+  mask = label != 0
+
+  match = match & mask
+
+  match = tf.cast(match, dtype=tf.float32)
+  mask = tf.cast(mask, dtype=tf.float32)
+  return tf.reduce_sum(match)/tf.reduce_sum(mask)
+
+
+class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+  def __init__(self, d_model, warmup_steps=4000):
+    super().__init__()
+
+    self.d_model = d_model
+    self.d_model = tf.cast(self.d_model, tf.float32)
+
+    self.warmup_steps = warmup_steps
+
+  def __call__(self, step):
+    step = tf.cast(step, dtype=tf.float32)
+    arg1 = tf.math.rsqrt(step)
+    arg2 = step * (self.warmup_steps ** -1.5)
+
+    return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
 if __name__=="__main__":
  # with tf.device('/CPU:0'):
@@ -505,26 +527,22 @@ if __name__=="__main__":
   wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
   # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
 
-  train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN)
-  valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN)
+  train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
+  valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
+
+  print(f"First train: {next(iter(train))}")
+  print(f"First valid: {next(iter(valid))}")
 
   # Make the datum both input and output
-  train = train.map(lambda s: (s, s))
-  valid = valid.map(lambda s: (s, s))
-
-  train_iter = iter(train)
-  valid_iter = iter(valid)
-  print(f"First train: {next(train_iter)}")
-  print(f"First valid: {next(valid_iter)}")
+  # train = train.map(lambda s: (s, s))
+  # valid = valid.map(lambda s: (s, s))
 
   train = train.batch(BATCH, drop_remainder=True)
   valid = valid.batch(BATCH, drop_remainder=True)
   # test = test.batch(BATCH)
 
-  train_iter = iter(train)
-  valid_iter = iter(valid)
-  print(f"First train batch: {next(train_iter)}")
-  print(f"First valid batch: {next(valid_iter)}")
+  print(f"First train batch: {next(iter(train))}")
+  print(f"First valid batch: {next(iter(valid))}")
 
   num_layers = 4
   d_model = 128
@@ -536,8 +554,36 @@ if __name__=="__main__":
   print(f"grapheme_count: {grapheme_count}")
 
   # def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
-  m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
+  # m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
 
-  m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'], run_eagerly=True)
-  m.fit(train, epochs=10)
-  m.evaluate(valid)
+  # m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'], run_eagerly=True)
+  # m.fit(train, epochs=10)
+  # m.evaluate(valid)
+
+  learning_rate = CustomSchedule(d_model)
+
+  optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
+                                     epsilon=1e-9)
+
+  transformer = Transformer(
+    num_layers=num_layers,
+    d_model=d_model,
+    num_heads=num_heads,
+    dff=dff,
+    input_vocab_size=grapheme_count,
+    target_vocab_size=grapheme_count,
+    dropout_rate=dropout_rate
+  )
+
+  transformer.compile(
+    loss=masked_loss,
+    optimizer=optimizer,
+    metrics=[masked_accuracy],
+    run_eagerly=True,
+   )
+
+  transformer.fit(train,
+                epochs=20,
+                validation_data=valid)
+
+
