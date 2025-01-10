@@ -313,9 +313,9 @@ class Transformer(tf.keras.Model):
 
  def call(self, inputs, *args, **kwargs):
   print(f"Transformer inputs: {inputs}")
-  print(f"Transformer inputs shape: {inputs.get_shape()}")
-  print(f"Transformer args: {args}")
-  print(f"Transformer kwargs: {kwargs}")
+  # print(f"Transformer inputs shape: {inputs.get_shape()}")
+  # print(f"Transformer args: {args}")
+  # print(f"Transformer kwargs: {kwargs}")
   # To use a Keras model with `.fit` you must pass all your inputs in the
   # first argument.
   context, x  = inputs
@@ -464,17 +464,29 @@ class WordAutoencoderModel(tf.keras.Model):
 
 MAX_STR_LEN = 32
 
-def masked_loss(label, pred):
-  mask = label != 0
-  loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
-    from_logits=True, reduction='none')
-  loss = loss_object(label, pred)
+def make_masked_loss(start_idx: int):
+ def masked_loss(label: tf.Tensor, pred: tf.Tensor):
+   mask = label != 0
+   loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
+     from_logits=True,
+     reduction='none'
+   )
 
-  mask = tf.cast(mask, dtype=loss.dtype)
-  loss *= mask
+   # # Re-add the start token
+   # batch_size = label.get_shape()[0]
+   # starts = tf.constant([[start_idx]] * batch_size, dtype=label.dtype)
+   # label = tf.concat([starts, label], 1)
 
-  loss = tf.reduce_sum(loss)/tf.reduce_sum(mask)
-  return loss
+   pred = pred[:, 1:]# drop the start token
+  
+   loss = loss_object(label, pred)
+
+   mask = tf.cast(mask, dtype=loss.dtype)
+   loss *= mask
+
+   loss = tf.reduce_sum(loss)/tf.reduce_sum(mask)
+   return loss
+ return masked_loss
 
 
 def masked_accuracy(label, pred):
@@ -507,6 +519,22 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 
     return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
+# MAX_TOKENS=128
+def prepare_batch(x: tf.Tensor, y: tf.Tensor):
+
+    # pt = tokenizers.pt.tokenize(pt)      # Output is ragged.
+    # pt = pt[:, :MAX_TOKENS]    # Trim to MAX_TOKENS.
+    # pt = pt.to_tensor()  # Convert to 0-padded dense Tensor
+
+    # en = tokenizers.en.tokenize(en)
+    # en = en[:, :(MAX_TOKENS+1)]
+    # en_inputs = en[:, :-1].to_tensor()  # Drop the [END] tokens
+    # en_labels = en[:, 1:].to_tensor()   # Drop the [START] tokens
+
+    labels = y[:, 1:]
+
+    return (x, y), labels
+
 if __name__=="__main__":
  # with tf.device('/CPU:0'):
  with tf.device('gpu'):
@@ -537,8 +565,8 @@ if __name__=="__main__":
   # train = train.map(lambda s: (s, s))
   # valid = valid.map(lambda s: (s, s))
 
-  train = train.batch(BATCH, drop_remainder=True)
-  valid = valid.batch(BATCH, drop_remainder=True)
+  train = train.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
+  valid = valid.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
   # test = test.batch(BATCH)
 
   print(f"First train batch: {next(iter(train))}")
@@ -574,6 +602,8 @@ if __name__=="__main__":
     target_vocab_size=grapheme_count,
     dropout_rate=dropout_rate
   )
+
+  masked_loss = make_masked_loss(grapheme_idx.start_idx())
 
   transformer.compile(
     loss=masked_loss,
