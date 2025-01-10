@@ -13,13 +13,13 @@ BATCH=10
 GRAPHEME_QUERY=16
 EMBED = 64
 
-def flatten(xss):
- return [x for xs in xss for x in xs]
+# def flatten(xss):
+#  return [x for xs in xss for x in xs]
 
-def pad(a: list[int], pad: int, pad_to: int) -> list[int]:
- # print(f"a: {a}")
- # print(f"pad_to: {pad_to}")
- return a + [pad] * (pad_to- len(a))
+# def pad(a: list[int], pad: int, pad_to: int) -> list[int]:
+#  # print(f"a: {a}")
+#  # print(f"pad_to: {pad_to}")
+#  return a + [pad] * (pad_to- len(a))
 
 # def index_batch(grapheme_idx: T2I, batched_token_graphemes: list[list[str]]):
 #  pad_idx = grapheme_idx.index(grapheme_idx.pad_token)[0]

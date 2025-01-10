@@ -24,7 +24,7 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
             trunc = normalized[:token_truncate_len]
             print(f"WPTD trunc {trunc}")
 
-            grapheme_indices = grapheme_idx.index_token(trunc, pad_to_token_len=token_truncate_len)
+            grapheme_indices = grapheme_idx.index_token(trunc, pad_to_token_len=token_truncate_len, use_unk=True)
             
             print(f"WPTD grapheme_indices: {grapheme_indices}")
             # tokens = tokenizer.tokenize(trunc)
@@ -35,10 +35,7 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
             # print(f"WPTD tokens_as_indexed_graphemes: {tokens_as_indexed_graphemes}")
             # yield tokens_as_indexed_graphemes 
             yield grapheme_indices
-            
 
-            # yield normalized
-            # yield tf.constant(normalized, dtype=tf.string)
 
 def wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, grapheme_idx: GraphemeIdx, token_truncate_len: int):
     gen = lambda: _gen_wp_titles_dataset(path, tokenizer, grapheme_idx, token_truncate_len)

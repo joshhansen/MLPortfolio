@@ -1,7 +1,7 @@
 import os
 
 class GraphemeIdx:
- def __init__(self, idx: dict[str,int], start: str, end: str, pad: str):
+ def __init__(self, idx: dict[str,int], start: str, end: str, pad: str, unk: str):
   self.idx = idx
   self.rev = dict()
   for k,v in idx.items():
@@ -10,16 +10,22 @@ class GraphemeIdx:
   self.index_grapheme(start)
   self.index_grapheme(end)
   self.index_grapheme(pad)
+  self.unk_idx = self.index_grapheme(unk)
 
   self.start = start
   self.end = end
   self.pad = pad
-  self.special_grapheme_count = 3
+  self.unk = unk
+  self.special_grapheme_count = 4
 
- def index_grapheme(self, grapheme: str) -> int:
+ # use_unk: if the grapheme hasn't been indexed, should the unk index be returned? Otherwise, the grapheme will be indexed and its newly-assigned index will be returned
+ def index_grapheme(self, grapheme: str, use_unk=False) -> int:
   try:
    return self.idx[grapheme]
   except KeyError:
+   if use_unk:
+    return self.unk_idx
+
    i = len(self.idx)
    self.idx[grapheme] = i
    self.rev[i] = grapheme
@@ -28,30 +34,30 @@ class GraphemeIdx:
  def unindex_grapheme(self, grapheme_idx: int) -> str:
   return self.rev[grapheme_idx]
  
- def index_token(self, token: str, pad_to_token_len: int) -> list[int]:
+ def index_token(self, token: str, pad_to_token_len: int, use_unk=False) -> list[int]:
   if len(token) > pad_to_token_len:
-   raise Error(f"Tried to index token longer than padding length")
+   raise Exception(f"Tried to index token longer than padding length")
   
   graphemes = [self.start] + list(token) + [self.end]
   pad_len = pad_to_token_len + 2 - len(graphemes)# +2 for start and end
   graphemes = graphemes + [self.pad] * pad_len
 
-  return [self.index_grapheme(g) for g in graphemes]
+  return [self.index_grapheme(g, use_unk=use_unk) for g in graphemes]
 
  def unindex_token(self, token_grapheme_indices: list[int]) -> str:
   graphemes: list[str] = [self.unindex_grapheme(gi) for gi in token_grapheme_indices]
   return ''.join(graphemes)
    
  # Add all graphemes to the index, and return their indices
- def index_tokens(self, tokens: list[str], pad_to = 'max') -> list[list[int]]:
+ def index_tokens(self, tokens: list[str], pad_to = 'max', use_unk=False) -> list[list[int]]:
   pad_to = max([len(t) for t in tokens]) if pad_to=='max' else pad_to
-  return [self.index_token(t, pad_to) for t in tokens]
+  return [self.index_token(t, pad_to, use_unk=use_unk) for t in tokens]
 
  def unindex_tokens(self, token_grapheme_indices: list[list[int]]) -> list[str]:
   return [self.unindex_token(tgi) for tgi in token_grapheme_indices]
 
  def __call__(self, tokens: list[str]) -> list[list[int]]:
-  self.index_tokens(tokens)
+  return self.index_tokens(tokens)
 
  def __str__(self) -> str:
   return str(self.idx)
@@ -83,4 +89,4 @@ def load_grapheme_idx() -> GraphemeIdx:
 
     grapheme_idx[g] = i
 
-  return GraphemeIdx(grapheme_idx, '<start>', '<end>', '<pad>')
+  return GraphemeIdx(grapheme_idx, '<start>', '<end>', '<pad>', '<unk>')
