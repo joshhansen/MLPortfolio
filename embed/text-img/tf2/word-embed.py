@@ -363,44 +363,6 @@ class Transformer(tf.keras.Model):
   return logits
 
 
-# class WordAutoencoder(tf.keras.layers.Layer):
-#     def __init__(self, grapheme_count: int):
-#         super().__init__()
-
-#         self.transformer = Transformer(num_layers, d_model: int, num_heads: int, dff: int,
-#          input_vocab_size: int, target_vocab_size: int, dropout_rate=0.1
-#         )
-
-#         # self.grapheme_enc_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, EMBED), initializer="random_normal", trainable=True)
-#         # self.grapheme_dec_query = self.add_weight(shape=(BATCH, GRAPHEME_QUERY, grapheme_count), initializer="random_normal", trainable=True)
-#         self.grapheme_emb = tf.keras.layers.Embedding(
-#          grapheme_count,
-#          EMBED,
-#         )
-#         # self.grapheme_attn_enc = tf.keras.layers.Attention()
-#         # self.grapheme_attn_dec = tf.keras.layers.Attention()
-#         # self.grapheme_attn = tf.keras.layers.MultiHeadAttention(key_dim=EMBED, num_heads=1)
-
-#     # token_grapheme_indices: (batch, token, grapheme); integers representing token indices 
-#     def call(self, token_grapheme_indices: tf.Tensor):
-#      print(grapheme_indices)
-#      # shape: batch, token, grapheme
-
-#      grapheme_embs = self.grapheme_emb(grapheme_indices)
-#      print(grapheme_embs)
-
-#      # token_emb = self.grapheme_attn([self.grapheme_query, grapheme_embs])
-#      # token_emb = self.grapheme_attn(query=self.grapheme_query, value=grapheme_embs)
-
-#      #TODO decoder
-
-#      # prior = tf.zeros((BATCH, ))
-#      # while True:
-
-#      output = self.transformer(grapheme_embs)
-
-#      return token_emb
-
 class Translator(tf.Module):
   def __init__(self, grapheme_idx: GraphemeIdx, transformer: Transformer):
    self.grapheme_idx = grapheme_idx
@@ -419,7 +381,6 @@ class Translator(tf.Module):
 
     # Initialize the output with a start token, and prep the end token
     starts = tf.constant([self.grapheme_idx.start_idx()] * batch_size, dtype=int_dtype)
-    # end = tf.constant([self.grapheme_idx.end_idx()] * batch_size, dtype=int_dtype)
 
     # `tf.TensorArray` is required here (instead of a Python list), so that the
     # dynamic-loop can be traced by `tf.function`.
@@ -460,18 +421,6 @@ class Translator(tf.Module):
       # decoder as its input.
       output_array = output_array.write(i+1, predicted_id)
 
-      # ended = predicted_id == end
-
-      # print(f"Translator ended.get_shape: {ended.get_shape()}")
-      # print(f"Translator ended.dtype: {ended.dtype}")
-
-
-      # if ended.all():
-      #   break
-
-      #TODO early exit if all outputs have emitted an end token
-
-    # output_array = output_array.write(MAX_STR_LEN+1, end)
     output = tf.transpose(output_array.stack())
 
     print(f"Translator output.get_shape: {output.get_shape()}")
@@ -529,23 +478,6 @@ class WordAutoencoderModel(tf.keras.Model):
 
    return probs
 
-# def titles_datum_extractor(title, tokenizer):
- # print(f"titles_datum_extractor title {title}")
- # tokens = tokenizer.tokenize(title)
- # print(f"titles_datum_extractor tokens {tokens}")
- # return (tokens, tokens)# return as x and y as this is an autoencoder
-
-# def tokenize_str(s: tf.Tensor) -> tf.RaggedTensor:
-#  print(s.numpy())
-#  # FIXME
-#  return s
-
-# titles shape: (batch,None,)
-# def tokenize(titles: tf.RaggedTensor) -> tf.RaggedTensor:
-#  print(f"titles shape: {titles.shape}")
-#  print(f"titles type: {type(titles)}")
-#  return tf.map_fn(tokenize_str, titles)
-
 MAX_STR_LEN = 32
 
 if __name__=="__main__":
@@ -558,27 +490,14 @@ if __name__=="__main__":
   grapheme_idx = load_grapheme_idx()
   print(grapheme_idx)
 
-  
-
   # tokenizer = tft.UnicodeScriptTokenizer()
   tokenizer = tft.WhitespaceTokenizer()
   def tokenize(s: str):
    return tokenizer.tokenize(s)
   
- #  # text = GutenbergTextDataset(text_dir)
- #  # text = text.map(lambda x: tft.ngrams(tokenizer.tokenize(x), 5, reduction_type=tft.Reduction.STRING_JOIN, string_separator='\x00'))
- #  # text = text.shuffle(200)
-
   wptitles_train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.gz')
   wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
   # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
-
-  # train = tf.data.TextLineDataset(wptitles_train_path, compression_type='GZIP')
-  # valid = tf.data.TextLineDataset(wptitles_valid_path, compression_type='GZIP')
-
-  # train = WikipediaTitlesDataset(wptitles_train_path)
-  # valid = WikipediaTitlesDataset(wptitles_valid_path)
-  # test= WikipediaTitlesDataset(wptitles_test_path).map(lambda x: tokenizer.tokenize(x))
 
   train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN)
   valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN)
@@ -610,54 +529,8 @@ if __name__=="__main__":
   grapheme_count = len(grapheme_idx)
   print(f"grapheme_count: {grapheme_count}")
 
- #  transformer = Transformer(
- #    num_layers=num_layers,
- #    d_model=d_model,
- #    num_heads=num_heads,
- #    dff=dff,
- #    input_vocab_size=grapheme_count ,
- #    target_vocab_size=grapheme_count ,
- #    dropout_rate=dropout_rate
- #  )
-
- #  # m = WordAutoencoder(grapheme_idx.t2i.highest_idx + 1)
- # # model.compile(optimizer='adam',
- # #   loss='sparse_categorical_crossentropy',
- # #   metrics=['accuracy'])
- # # model.fit(x_train, y_train, epochs=5)
- # # model.evaluate(x_test, y_test)
-
- #  m = Translator(grapheme_idx, transformer)
   # def __init__(self, num_layers: int, d_model: int, num_heads: int, dff: int, grapheme_count: int, dropout_rate: float, **kwargs):
   m = WordAutoencoderModel(num_layers, d_model, num_heads, dff, grapheme_count, dropout_rate)
 
   m.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'], run_eagerly=True)
   m.fit(train, epochs=10)
-  # m.evaluate(valid)
-
-
-
-  # it_txt = iter(text)
-  # available_tokens: list[str] = list()
-  # while True:
-  #  try:
-  #   txt = next(it_txt)
-  #   tokens = txt.to_list()[0]
-  #   tokens = [t.decode() for t in tokens]
-
-  #   available_tokens.extend(tokens)
-
-  #   while len(available_tokens) >= BATCH:
-  #    batch = available_tokens[:BATCH]
-  #    available_tokens = available_tokens[BATCH:]
-
-  #    print(f"batch len: {len(batch)}")
-  #    print(f"available tokens: {len(available_tokens)}")
-
-
-  #    output, _, __ = m(batch)
-  #    print(output)
-  #    batch = list()
-
-  #  except StopIteration:
-  #   pass
