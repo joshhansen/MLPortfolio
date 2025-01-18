@@ -64,6 +64,7 @@ class Enc(tf.keras.layers.Layer):
   self.add = tf.keras.layers.Add()
 
  def call(self, x: tf.Tensor):
+  # print(f"Enc x shape: {x.get_shape()}")
   # (batch, seq, emb)
   attn = self.mha(
    query=x,
@@ -72,11 +73,14 @@ class Enc(tf.keras.layers.Layer):
   )
   # (batch, seq, emb)
   x = self.add([x, attn])
+  # print(f"Enc x shape2: {x.get_shape()}")
   # (batch, seq, emb)
   x = tf.reduce_sum(x, 1)
   # (batch, emb)
+  # print(f"Enc x shape3: {x.get_shape()}")
   x = self.layernorm(x)
   # (batch, emb)
+  # print(f"Enc x shape4: {x.get_shape()}")
   return x
 
 class Encoder(tf.keras.layers.Layer):
@@ -111,14 +115,26 @@ class Decoder(tf.keras.layers.Layer):
    num_heads=num_heads,
    key_dim=emb,
   )
+  self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
 
  def call(self, x: tf.Tensor):
   # (batch, emb)
+  # print(f"Dec x shape: {x.get_shape()}")
 
-  x = tf.repeat(x, MAX_STR_LEN, 1)
+  #TODO Does manually broadcasting make sense? Is it needed?
+  # x = tf.repeat(x, MAX_STR_LEN - 1, 1)
+  x = tf.tile(x, [1, MAX_STR_LEN - 1])
+  # (batch, seq*emb)
+  # print(f"Dec x shape2: {x.get_shape()}")
 
+  batch = x.get_shape()[0]
+
+  #TODO Check if this makes sense!
+  x = tf.reshape(x, (batch, MAX_STR_LEN - 1, self.emb_size))
   # (batch, seq, emb)
+  # print(f"Dec x shape2': {x.get_shape()}")
+  # print(x)
 
   x = self.mha(
    query=x,
@@ -127,17 +143,40 @@ class Decoder(tf.keras.layers.Layer):
   )
 
   # (batch, seq, emb)
+  # print(f"Dec x shape3: {x.get_shape()}")
 
   x = self.emb_to_vocab(x)
 
   # (batch, seq, vocab)
+  # print(f"Dec x shape4: {x.get_shape()}")
 
-  x = tf.math.argmax(x, 2)
+  # x = tf.math.argmax(x, 2)
 
   # (batch, seq) ???
+  # print(f"Dec x shape5: {x.get_shape()}")
 
   return x
 
+class EncDec(tf.keras.Model):
+ def __init__(self, *, num_heads: int, emb:int, input_vocab_size: int, output_vocab_size: int):
+  super().__init__()
+  self.enc = Encoder(
+   num_heads=num_heads,
+   input_vocab_size=input_vocab_size,
+   emb=emb,
+  )
+  self.dec = Decoder(
+   num_heads=num_heads,
+   emb=emb,
+   output_vocab_size=output_vocab_size,
+  )
+
+ # def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
+  # x, y = inputs
+ def call(self, x: tf.Tensor):
+
+  x_enc = self.enc(x)
+  return self.dec(x_enc)
   
 
 if __name__=="__main__":
@@ -188,15 +227,22 @@ if __name__=="__main__":
   #  vocab_size=grapheme_count,
   #  emb=d_model
   # )
-  enc = Encoder(
+ #  enc = Encoder(
+ #   num_heads=num_heads,
+ #   input_vocab_size=grapheme_count,
+ #   emb=d_model,
+ #  )
+ # # def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
+ #  dec = Decoder(
+ #   num_heads=num_heads,
+ #   emb=d_model,
+ #   output_vocab_size=grapheme_count,
+ #  )
+
+  m = EncDec(
    num_heads=num_heads,
+   emb=d_model,
    input_vocab_size=grapheme_count,
-   emb=d_model,
-  )
- # def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
-  dec = Decoder(
-   num_heads=num_heads,
-   emb=d_model,
    output_vocab_size=grapheme_count,
   )
 
@@ -206,11 +252,15 @@ if __name__=="__main__":
 
   # print(x_emb)
 
-  x_enc = enc(x)
+  # x_enc = enc(x)
 
-  print(x_enc)
+  # print(x_enc)
+  # print(f"x_enc shape: {x_enc.get_shape()}")
 
-  x_dec = dec(x_enc)
+  # x_dec = dec(x_enc)
+
+  x_dec = m(x)
+
 
   print(x_dec)
 
@@ -219,3 +269,17 @@ if __name__=="__main__":
   # y_emb = pos(y)
 
   # print(y_emb)
+  optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
+                                     epsilon=1e-9)
+  loss = tf.keras.losses.SparseCategoricalCrossentropy(
+    # from_logits=True,
+    # reduction='none'
+  )
+
+  m.compile(
+   loss=loss,
+   optimizer=optimizer,
+   run_eagerly=True,
+  )
+
+  m.fit(train, epochs=20, validation_data=valid)

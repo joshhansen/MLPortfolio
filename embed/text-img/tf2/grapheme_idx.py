@@ -36,7 +36,7 @@ class GraphemeIdx:
  
  def index_txt(self, txt: str, max_output_len: int, use_unk=False) -> list[int]:
   if len(txt) > max_output_len - 2:# -2 to allow for start and end tokens
-   raise Exception(f"Tried to index text {txt} with max output len {max_output_len}; start/end might not fit")
+   raise Exception(f"Tried to index text \"{txt}\" with max output len {max_output_len}; start/end might not fit")
 
   pads = max_output_len - len(txt) - 2# -2 to allow start/end tokens
 

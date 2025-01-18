@@ -22,7 +22,7 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
             # print(f"WPTD normalized {normalized}")
 
             if len(normalized) > token_truncate_len - 2:
-             trunc = normalized[:(token_truncate_len - 1)]# -2 to allow start/end, +1 for exclusive range end
+             trunc = normalized[:(token_truncate_len - 2)]# -2 to allow start/end
             else:
              trunc = normalized
                 
