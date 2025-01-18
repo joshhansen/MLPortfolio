@@ -187,79 +187,30 @@ class DecoderLayer(tf.keras.layers.Layer):
   self.last_attn_scores = self.cross_attention.last_attn_scores
 
   x = self.ffn(x)  # Shape `(batch_size, seq_len, d_model)`.
+  return x
+
+ 
+class DecoderLayerNoContext(tf.keras.layers.Layer):
+ def __init__(self,
+             *,
+             d_model: int,
+             num_heads: int,
+             dff: int,
+             dropout_rate=0.1):
+  super(DecoderLayerNoContext, self).__init__()
+
+  self.causal_self_attention = CausalSelfAttention(
+      num_heads=num_heads,
+      key_dim=d_model,
+      dropout=dropout_rate)
+
+  self.ffn = FeedForward(d_model, dff)
+
+ def call(self, x: tf.Tensor):
+  x = self.causal_self_attention(x=x)
+
+  x = self.ffn(x)  # Shape `(batch_size, seq_len, d_model)`.
   return x 
-
-# class DecoderOld(tf.keras.layers.Layer):
-#   @classmethod
-#   def add_method(cls, fun):
-#     setattr(cls, fun.__name__, fun)
-#     return fun
-
-#   def __init__(self, grapheme_count: int, units: int):
-#     # super(Decoder, self).__init__()
-#     # self.text_processor = text_processor
-#     # self.vocab_size = text_processor.vocabulary_size()
-#     # self.word_to_id = tf.keras.layers.StringLookup(
-#     #     vocabulary=text_processor.get_vocabulary(),
-#     #     mask_token='', oov_token='[UNK]')
-#     # self.id_to_word = tf.keras.layers.StringLookup(
-#     #     vocabulary=text_processor.get_vocabulary(),
-#     #     mask_token='', oov_token='[UNK]',
-#     #     invert=True)
-#     # self.start_token = self.word_to_id('[START]')
-#     # self.end_token = self.word_to_id('[END]')
-
-#     # self.units = units
-
-
-#     # # 1. The embedding layer converts token IDs to vectors
-#     # self.embedding = tf.keras.layers.Embedding(self.vocab_size,
-#     #                                            units, mask_zero=True)
-
-#     # 2. The RNN keeps track of what's been generated so far.
-#     self.rnn = tf.keras.layers.GRU(units,
-#                                    return_sequences=True,
-#                                    return_state=True,
-#                                    recurrent_initializer='glorot_uniform')
-
-#     # 3. The RNN output will be the query for the attention layer.
-#     self.attention = CrossAttention(units)
-
-#     # 4. This fully connected layer produces the logits for each
-#     # output grapheme.
-#     self.output_layer = tf.keras.layers.Dense(grapheme_count)
-
-#     @Decoder.add_method
-#     def call(self,
-#              token_emb,
-#              state=None,
-#              return_state=False):  
-#       # shape_checker = ShapeChecker()
-#       # shape_checker(x, 'batch t')
-#       # shape_checker(context, 'batch s units')
-
-#       # # 1. Lookup the embeddings
-#       # x = self.embedding(x)
-#       # shape_checker(x, 'batch t units')
-
-#       # 2. Process the target sequence.
-#       x, state = self.rnn(token_emb)
-#       shape_checker(x, 'batch t units')
-
-#       # 3. Use the RNN output as the query for the attention over the context.
-#       x = self.attention(x, context)
-#       self.last_attention_weights = self.attention.last_attention_weights
-#       # shape_checker(x, 'batch t units')
-#       # shape_checker(self.last_attention_weights, 'batch t s')
-
-#       # Step 4. Generate logit predictions for the next token.
-#       logits = self.output_layer(x)
-#       shape_checker(logits, 'batch t target_vocab_size')
-
-#       if return_state:
-#         return logits, state
-#       else:
-#         return logits
 
 class Decoder(tf.keras.layers.Layer):
  def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
@@ -295,6 +246,41 @@ class Decoder(tf.keras.layers.Layer):
   # The shape of x is (batch_size, target_seq_len, d_model).
   return x
 
+class DecoderNoContext(tf.keras.Model):
+ def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
+              vocab_size: int, dropout_rate=0.1):
+  super(DecoderNoContext, self).__init__()
+
+  self.d_model = d_model
+  self.num_layers = num_layers
+
+  self.pos_embedding = PositionalEmbedding(vocab_size=vocab_size,
+                                           d_model=d_model)
+  self.dropout = tf.keras.layers.Dropout(dropout_rate)
+  self.dec_layers = [
+      DecoderLayerNoContext(d_model=d_model, num_heads=num_heads,
+                   dff=dff, dropout_rate=dropout_rate)
+      for _ in range(num_layers)]
+
+  self.last_attn_scores = None
+
+ def call(self, x: tf.Tensor):
+  # print(f"Decoder x.get_shape: {x.get_shape()}")
+  # print(f"Decoder context.get_shape: {context.get_shape()}")
+  # `x` is token-IDs shape (batch, target_seq_len)
+  x = self.pos_embedding(x)  # (batch_size, target_seq_len, d_model)
+
+  x = self.dropout(x)
+
+  for i in range(self.num_layers):
+    x  = self.dec_layers[i](x)
+
+  self.last_attn_scores = self.dec_layers[-1].last_attn_scores
+
+  # The shape of x is (batch_size, target_seq_len, d_model).
+  return x
+ 
+
 class Transformer(tf.keras.Model):
  def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
              input_vocab_size: int, target_vocab_size: int, dropout_rate=0.1):
@@ -311,7 +297,7 @@ class Transformer(tf.keras.Model):
 
   self.final_layer = tf.keras.layers.Dense(target_vocab_size)
 
- def call(self, inputs, *args, **kwargs):
+ def call(self, inputs: tuple[tf.Tensor, tf.Tensor], *args, **kwargs):
   print(f"Transformer inputs: {inputs}")
   # print(f"Transformer inputs shape: {inputs.get_shape()}")
   # print(f"Transformer args: {args}")
@@ -346,6 +332,95 @@ class Transformer(tf.keras.Model):
   # Return the final output and the attention weights.
   return logits
 
+class Text2Emb(tf.keras.Model):
+ def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
+             input_vocab_size: int, dropout_rate=0.1):
+  super(Text2Emb, self).__init__()
+  self.encoder = Encoder(num_layers=num_layers, d_model=d_model,
+                         num_heads=num_heads, dff=dff,
+                         vocab_size=input_vocab_size,
+                         dropout_rate=dropout_rate)
+
+
+
+ def call(self, input: tf.Tensor, *args, **kwargs):
+  print(f"Text2Emb input: {input}")
+  # (batch, seq)
+
+  seq_with_attn = self.encoder(input)
+
+  # (batch, seq, attn)
+
+  out = tf.reduce_sum(seq_with_attn, 1)
+
+  # (batch, attn)
+
+  return out
+
+class Emb2Text(tf.keras.Model):
+ def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
+             target_vocab_size: int, dropout_rate=0.1):
+  super(Emb2Text, self).__init__()
+
+  self.decoder = DecoderNoContext(
+   num_layers=num_layers,
+   d_model=d_model,
+   num_heads=num_heads,
+   dff=dff,
+   vocab_size=target_vocab_size,
+   dropout_rate=dropout_rate
+  )
+  self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+
+ def call(self, input: tf.Tensor, *args, **kwargs):
+  print(f"EmbToText input: {input}")
+
+  # (batch, emb)
+
+  # Copy the embedding into every potential sequence location
+  expanded = tf.repeat(input, MAX_STR_LEN, 1)
+  # (batch, seq, emb)
+
+  x = self.decoder(expanded)  # (batch_size, target_len, d_model)
+
+  # Final linear layer output.
+  logits = self.final_layer(x)  # (batch_size, target_len, target_vocab_size)
+
+  try:
+    # Drop the keras mask, so it doesn't scale the losses/metrics.
+    # b/250038731
+    del logits._keras_mask
+  except AttributeError:
+    pass
+
+  # Return the final output and the attention weights.
+  return logits
+
+class Text2Emb2Text(tf.keras.Model):
+ def __init__(self, *, num_layers: int, d_model: int, num_heads: int, dff: int,
+             input_vocab_size: int, target_vocab_size: int, dropout_rate=0.1):
+  super().__init__()
+  self.enc = Text2Emb(
+   num_layers=num_layers,
+   d_model=d_model,
+   num_heads=num_heads,
+   dff=dff,
+   input_vocab_size=input_vocab_size,
+   dropout_rate=dropout_rate
+  )
+  self.dec = Emb2Text(
+   num_layers=num_layers,
+   d_model=d_model,
+   num_heads=num_heads,
+   dff=dff,
+   target_vocab_size=target_vocab_size,
+   dropout_rate=dropout_rate
+  )
+
+ def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
+  x, y = inputs
+  return self.dec(self.enc(x))
+ 
 
 class Translator(tf.Module):
   def __init__(self, grapheme_idx: GraphemeIdx, transformer: Transformer):
@@ -593,7 +668,17 @@ if __name__=="__main__":
   optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
                                      epsilon=1e-9)
 
-  transformer = Transformer(
+  # transformer = Transformer(
+  #   num_layers=num_layers,
+  #   d_model=d_model,
+  #   num_heads=num_heads,
+  #   dff=dff,
+  #   input_vocab_size=grapheme_count,
+  #   target_vocab_size=grapheme_count,
+  #   dropout_rate=dropout_rate
+  # )
+
+  text2emb2text = Text2Emb2Text(
     num_layers=num_layers,
     d_model=d_model,
     num_heads=num_heads,
@@ -605,14 +690,14 @@ if __name__=="__main__":
 
   masked_loss = make_masked_loss(grapheme_idx.start_idx())
 
-  transformer.compile(
+  text2emb2text .compile(
     loss=masked_loss,
     optimizer=optimizer,
     metrics=[masked_accuracy],
     run_eagerly=True,
    )
 
-  transformer.fit(train,
+  text2emb2text .fit(train,
                 epochs=20,
                 validation_data=valid)
 

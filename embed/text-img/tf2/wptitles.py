@@ -7,7 +7,7 @@ import tensorflow_text as tft
 
 from grapheme_idx import GraphemeIdx
 
-def normalize(s: str):
+def normalize(s: str) -> str:
     return s.lower().replace('_', ' ').strip()
 
 def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, grapheme_idx: GraphemeIdx, token_truncate_len: int, include_label=False):
@@ -21,10 +21,15 @@ def _gen_wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, graph
             normalized = normalize(line)
             # print(f"WPTD normalized {normalized}")
 
-            trunc = normalized[:token_truncate_len]
+            if len(normalized) > token_truncate_len - 2:
+             trunc = normalized[:(token_truncate_len - 1)]# -2 to allow start/end, +1 for exclusive range end
+            else:
+             trunc = normalized
+                
+
             # print(f"WPTD trunc {trunc}")
 
-            grapheme_indices = grapheme_idx.index_token(trunc, pad_to_token_len=token_truncate_len, use_unk=True)
+            grapheme_indices = grapheme_idx.index_txt(trunc, max_output_len=token_truncate_len, use_unk=True)
             
             if include_label:
                 yield grapheme_indices, grapheme_indices
@@ -37,8 +42,8 @@ def wp_titles_dataset(path: Path, tokenizer: tft.WhitespaceTokenizer, grapheme_i
 
     if include_label:
         return tf.data.Dataset.from_generator(gen, output_signature=(
-            tf.TensorSpec(shape=(token_truncate_len+2,), dtype=tf.int32),
-            tf.TensorSpec(shape=(token_truncate_len+2,), dtype=tf.int32)
+            tf.TensorSpec(shape=(token_truncate_len,), dtype=tf.int32),
+            tf.TensorSpec(shape=(token_truncate_len,), dtype=tf.int32)
         ))
 
-    return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(token_truncate_len+2,), dtype=tf.int32))
+    return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(token_truncate_len,), dtype=tf.int32))

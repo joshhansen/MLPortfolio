@@ -34,30 +34,30 @@ class GraphemeIdx:
  def unindex_grapheme(self, grapheme_idx: int) -> str:
   return self.rev[grapheme_idx]
  
- def index_token(self, token: str, pad_to_token_len: int, use_unk=False) -> list[int]:
-  if len(token) > pad_to_token_len:
-   raise Exception(f"Tried to index token longer than padding length")
-  
-  graphemes = [self.start] + list(token) + [self.end]
-  pad_len = pad_to_token_len + 2 - len(graphemes)# +2 for start and end
-  graphemes = graphemes + [self.pad] * pad_len
+ def index_txt(self, txt: str, max_output_len: int, use_unk=False) -> list[int]:
+  if len(txt) > max_output_len - 2:# -2 to allow for start and end tokens
+   raise Exception(f"Tried to index text {txt} with max output len {max_output_len}; start/end might not fit")
 
+  pads = max_output_len - len(txt) - 2# -2 to allow start/end tokens
+
+  graphemes = [self.start] + list(txt) + [self.pad]*pads + [self.end]
+  
   return [self.index_grapheme(g, use_unk=use_unk) for g in graphemes]
 
- def unindex_token(self, token_grapheme_indices: list[int]) -> str:
+ def unindex_txt(self, token_grapheme_indices: list[int]) -> str:
   graphemes: list[str] = [self.unindex_grapheme(gi) for gi in token_grapheme_indices]
   return ''.join(graphemes)
    
  # Add all graphemes to the index, and return their indices
- def index_tokens(self, tokens: list[str], pad_to = 'max', use_unk=False) -> list[list[int]]:
-  pad_to = max([len(t) for t in tokens]) if pad_to=='max' else pad_to
-  return [self.index_token(t, pad_to, use_unk=use_unk) for t in tokens]
+ def index_txts(self, txts: list[str], pad_to = 'max', use_unk=False) -> list[list[int]]:
+  pad_to = max([len(t) for t in txts]) + 2 if pad_to=='max' else pad_to# +2 for start/end tokens
+  return [self.index_txt(t, pad_to, use_unk=use_unk) for t in txts]
 
- def unindex_tokens(self, token_grapheme_indices: list[list[int]]) -> list[str]:
-  return [self.unindex_token(tgi) for tgi in token_grapheme_indices]
+ def unindex_txts(self, token_grapheme_indices: list[list[int]]) -> list[str]:
+  return [self.unindex_txt(tgi) for tgi in token_grapheme_indices]
 
- def __call__(self, tokens: list[str]) -> list[list[int]]:
-  return self.index_tokens(tokens)
+ def __call__(self, txts: list[str]) -> list[list[int]]:
+  return self.index_txts(txts)
 
  def __str__(self) -> str:
   return str(self.idx)
