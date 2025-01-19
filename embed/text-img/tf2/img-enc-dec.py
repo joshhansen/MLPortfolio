@@ -3,10 +3,8 @@ import os
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Conv2D
-import tensorflow_text as tft
 
-from grapheme_idx import GraphemeIdx, load_grapheme_idx
-from wptitles import wp_titles_dataset
+from images import images_dataset
 
 BATCH=10
 MAX_STR_LEN = 32
@@ -46,16 +44,10 @@ class PositionalEmbedding(tf.keras.layers.Layer):
   x = x + self.pos_encoding[tf.newaxis, :length, :]
   return x
 
-def prepare_batch(x: tf.Tensor, y: tf.Tensor):
-    x = x[:, :-1]# Drop end tokens
-
-    y = y[:, 1:] # Drop start tokens
-
-    return x, y
 
 class ResConvNorm(tf.keras.layers.Layer):
- def __init__(self, filters: int,  shape: tuple):
-  self.conv = Conv2d(filters, shape)
+ def __init__(self, filters: int,  shape: tuple, **kwargs):
+  self.conv = Conv2D(filters, shape, **kwargs)
   self.layernorm = tf.keras.layers.LayerNormalization()
 
  def call(self, x: tf.Tensor):
@@ -135,29 +127,23 @@ class Decoder(tf.keras.layers.Layer):
 
   #NOTE Do we need to add a 2d position embedding here to give it its bearings on the image?
 
-  for conv = self.convs:
+  for conv in self.convs:
    x = conv(x)
 
   return x
 
 class EncDec(tf.keras.Model):
- def __init__(self, *, num_heads: int, emb:int, input_vocab_size: int, output_vocab_size: int):
+ def __init__(self, *, emb:int):
   super().__init__()
+
   self.enc = Encoder(
-   num_heads=num_heads,
-   input_vocab_size=input_vocab_size,
    emb=emb,
   )
   self.dec = Decoder(
-   num_heads=num_heads,
    emb=emb,
-   output_vocab_size=output_vocab_size,
   )
 
- # def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
-  # x, y = inputs
  def call(self, x: tf.Tensor):
-
   x_enc = self.enc(x)
   return self.dec(x_enc)
   
@@ -165,16 +151,10 @@ class EncDec(tf.keras.Model):
 if __name__=="__main__":
   home_dir = os.path.expanduser('~')
 
-  grapheme_idx = load_grapheme_idx()
-  print(grapheme_idx)
+  path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png')
 
-  wptitles_train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.gz')
-  wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
-  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
-
-  tokenizer = tft.WhitespaceTokenizer()
-  train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
-  valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
+  train = images_dataset(path, 'train')
+  valid = images_dataset(path, 'valid')
 
   print(f"First train: {next(iter(train))}")
   print(f"First valid: {next(iter(valid))}")
@@ -183,53 +163,22 @@ if __name__=="__main__":
   # train = train.map(lambda s: (s, s))
   # valid = valid.map(lambda s: (s, s))
 
-  train = train.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
-  valid = valid.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
-  # test = test.batch(BATCH)
-
+  train = train.ragged_batch(BATCH, drop_remainder=True)
+  valid = valid.ragged_batch(BATCH, drop_remainder=True)
+  # test = test.ragged_batch(BATCH, drop_remainder=True)
 
   # num_layers = 4
   d_model = 128
   # dff = 512
-  num_heads = 8
+  # num_heads = 8
   # dropout_rate = 0.1
 
-  grapheme_count = len(grapheme_idx)
-  print(f"grapheme_count: {grapheme_count}")
-
-  train_in = train.map(lambda x,y: x)
-  train_out = train.map(lambda x,y: y)
-
-  # train_batch = next(iter(train))
-  # valid_batch = next(iter(valid))
-
-  # print(f"First train batch: {train_batch}")
-  # print(f"First valid batch: {valid_batch}")
-
-  # pos = PositionalEmbedding(
-  #  vocab_size=grapheme_count,
-  #  emb=d_model
-  # )
- #  enc = Encoder(
- #   num_heads=num_heads,
- #   input_vocab_size=grapheme_count,
- #   emb=d_model,
- #  )
- # # def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
- #  dec = Decoder(
- #   num_heads=num_heads,
- #   emb=d_model,
- #   output_vocab_size=grapheme_count,
- #  )
 
   m = EncDec(
-   num_heads=num_heads,
    emb=d_model,
-   input_vocab_size=grapheme_count,
-   output_vocab_size=grapheme_count,
   )
 
-  x = next(iter(train_in))
+  x = next(iter(train))
 
   # x_emb = pos(x)
 
