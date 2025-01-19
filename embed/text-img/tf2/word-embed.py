@@ -690,14 +690,14 @@ if __name__=="__main__":
 
   masked_loss = make_masked_loss(grapheme_idx.start_idx())
 
-  text2emb2text .compile(
+  text2emb2text.compile(
     loss=masked_loss,
     optimizer=optimizer,
     metrics=[masked_accuracy],
     run_eagerly=True,
    )
 
-  text2emb2text .fit(train,
+  text2emb2text.fit(train,
                 epochs=20,
                 validation_data=valid)
 
