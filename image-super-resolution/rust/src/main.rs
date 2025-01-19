@@ -6,7 +6,10 @@ use std::{
 };
 
 use burn::{
-    backend::{wgpu::WgpuDevice, Autodiff, Wgpu},
+    backend::{
+        wgpu::{JitBackend, WgpuDevice, WgpuRuntime},
+        Autodiff, Wgpu,
+    },
     data::{
         dataloader::{batcher::Batcher, DataLoaderBuilder},
         dataset::Dataset,
@@ -24,11 +27,13 @@ use image::{
     DynamicImage, ImageReader, ImageResult,
 };
 use nn::{conv::Conv2dConfig, loss::MseLoss, DropoutConfig, PaddingConfig2d, Sigmoid};
+use rand::Rng;
 
-const W_SMALL: usize = 700;
-const H_SMALL: usize = 700;
-const W_LARGE: usize = 1400;
-const H_LARGE: usize = 1400;
+type fX = f32;
+
+const SMALL_MIN_W: usize = 70;
+const SMALL_MIN_H: usize = 70;
+
 const INTERMEDIATE_FEATURES: usize = 16;
 
 lazy_static::lazy_static! {
@@ -59,11 +64,15 @@ enum Commands {
         #[arg(long, default_value_t = 100)]
         epochs: usize,
 
-        #[arg(long, short = 'u', default_value_t = 3)]
-        units: usize,
+        /// Moving average window for reporting
+        #[arg(long, default_value_t = 100)]
+        recent_window: usize,
 
         #[arg(long, short = 'd', default_value = "0", value_parser = parse_device)]
         dev: Vec<WgpuDevice>,
+
+        #[arg(long, short = 'S', default_value_t = 10)]
+        samples_per_img: usize,
     },
 }
 
@@ -77,17 +86,6 @@ fn parse_device(s: &str) -> Result<WgpuDevice, String> {
         .map_err(|_| format!("Unrecognized device: {}", s))?;
 
     Ok(WgpuDevice::DiscreteGpu(idx))
-}
-
-fn write_state<B: Backend>(epoch: usize, model: Model<B>, output_dir: &Path) {
-    let model_path = {
-        let mut p = output_dir.to_path_buf();
-        p.push(epoch.to_string());
-        p
-    };
-    model
-        .save_file(model_path, &*RECORDER)
-        .expect("Should be able to save the model");
 }
 
 struct ImageSRDataset {
@@ -159,11 +157,12 @@ struct ImageSRBatcher<B: Backend> {
     device: B::Device,
     small_min_width: usize,
     small_min_height: usize,
-    large_min_width: usize,
-    large_min_height: usize,
 
     /// Factor needs to be known so we can pre-upscale "small"
     pub factor: usize,
+
+    /// The number of sub-images to extract form each image
+    samples: usize,
 }
 
 impl<B: Backend> ImageSRBatcher<B> {
@@ -171,22 +170,25 @@ impl<B: Backend> ImageSRBatcher<B> {
         ImageReader::open(img_path)?.with_guessed_format()?.decode()
     }
 
-    /// If the image is smaller than the specified minimums, Ok(None) is returned
-    /// Otherwise, the image cropped to the minimums is returned
-    fn load_cropped_img_as_tensor(
-        &self,
-        img_path: &Path,
+    /// If an image is smaller than the specified minimums, Ok(None) is returned
+    /// Otherwise, `samples` random sub-images are returned in stacked tensors,
+    /// the first for 'small', the second for 'large'
+    fn load_cropped_imgs_as_tensors(
+        small_img_path: &Path,
+        large_img_path: &Path,
         dev: &B::Device,
-        min_width: usize,
-        min_height: usize,
+        small_min_width: usize,
+        small_min_height: usize,
         factor: usize,
-        normalize: bool,
-    ) -> ImageResult<Option<Tensor<B, 3>>> {
-        let img = Self::load_img(img_path)?;
-        let w = img.width() as usize;
-        let h = img.height() as usize;
+        samples: usize,
+    ) -> ImageResult<Option<(Vec<Tensor<B, 3>>, Vec<Tensor<B, 3>>)>> {
+        let small = Self::load_img(small_img_path)?;
+        let large = Self::load_img(large_img_path)?;
 
-        if w < min_width || h < min_height {
+        let small_w = small.width() as usize;
+        let small_h = small.height() as usize;
+
+        if small_w < small_min_width || small_h < small_min_height {
             // eprintln!(
             //     "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
             //     img_path.display(),
@@ -200,27 +202,87 @@ impl<B: Backend> ImageSRBatcher<B> {
             return Ok(None);
         }
 
-        let new_w = w * factor;
-        let new_h = h * factor;
+        let large_min_width = small_min_width * factor;
+        let large_min_height = small_min_height * factor;
 
-        // Pre-upscale using a standard algorithm
-        let img = resize(&img, new_w as u32, new_h as u32, FilterType::Nearest);
+        let large_w = large.width() as usize;
+        let large_h = large.height() as usize;
 
-        let img = DynamicImage::ImageRgba8(img);
+        if large_w < large_min_width || large_h < large_min_height {
+            // eprintln!(
+            //     "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
+            //     img_path.display(),
+            //     w,
+            //     h,
+            //     min_width,
+            //     min_height,
+            //     factor,
+            //     normalize
+            // );
+            return Ok(None);
+        }
+
+        let mut small_imgs: Vec<Tensor<B, 3>> = Vec::with_capacity(samples);
+        let mut large_imgs: Vec<Tensor<B, 3>> = Vec::with_capacity(samples);
+
+        let small_max_x = small.width() as usize - small_min_width;
+        let small_max_y = small.height() as usize - small_min_height;
+
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..samples {
+            let small_x = rng.gen_range(0..small_max_x) as u32;
+            let small_y = rng.gen_range(0..small_max_y) as u32;
+
+            let large_x = small_x * factor as u32;
+            let large_y = small_y * factor as u32;
+
+            let small_img = small.crop_imm(
+                small_x,
+                small_y,
+                small_min_width as u32,
+                small_min_height as u32,
+            );
+            let large_img = large.crop_imm(
+                large_x,
+                large_y,
+                large_min_width as u32,
+                large_min_height as u32,
+            );
+
+            let small_img = resize(
+                &small_img,
+                large_min_width as u32,
+                large_min_height as u32,
+                FilterType::Nearest,
+            );
+
+            let small_img = DynamicImage::ImageRgba8(small_img);
+
+            let small_img = Self::img_to_tensor(small_img, true, dev); //FIXME
+            let large_img = Self::img_to_tensor(large_img, false, dev); //FIXME
+
+            small_imgs.push(small_img);
+            large_imgs.push(large_img);
+        }
+
+        Ok(Some((small_imgs, large_imgs)))
+    }
+
+    fn img_to_tensor(img: DynamicImage, normalize: bool, dev: &B::Device) -> Tensor<B, 3> {
+        let w = img.width() as usize;
+        let h = img.height() as usize;
 
         let bytes = img.into_rgb32f().into_vec();
 
         let flat_tensor: Tensor<B, 1> = Tensor::from_floats(&bytes[..], dev);
+        println!("Flat tensor shape: {:?}", flat_tensor.shape());
 
         // We know this because of the into_rgb32f() call which forces it to RGB
         let c = 3usize;
 
         // The data layout appears to be (w, h, c), see ImageBuffer::pixel_indices_unchecked
-        let img = flat_tensor.reshape([new_w, new_h, c]).slice([
-            Some((0i64, (min_width * factor) as i64)),
-            Some((0i64, (min_height * factor) as i64)),
-            None,
-        ]);
+        let img = flat_tensor.reshape([w, h, c]);
 
         // 0:width
         // 1:height
@@ -230,29 +292,112 @@ impl<B: Backend> ImageSRBatcher<B> {
         let img = img * if normalize { 255.0 } else { 1.0 };
 
         // Set the root of autodiff here
-        let img = img.detach();
-
-        Ok(Some(img))
+        img.detach()
     }
+
+    // /// If the image is smaller than the specified minimums, Ok(None) is returned
+    // /// Otherwise, `samples` random sub-images are returned in a stacked tensor
+    // fn load_cropped_imgs_as_tensor_old(
+    //     img_path: &Path,
+    //     dev: &B::Device,
+    //     min_width: usize,
+    //     min_height: usize,
+    //     factor: usize,
+    //     sample_locs: Option<Vec<(usize, usize)>>,
+    //     normalize: bool,
+    // ) -> ImageResult<Option<Tensor<B, 4>>> {
+    //     // let img: Tensor<B, 3> = Tensor::random(
+    //     //     vec![3, min_width * factor, min_height * factor],
+    //     //     Distribution::Normal(0f64, 1f64),
+    //     //     dev,
+    //     // );
+
+    //     let img = Self::load_img(img_path)?;
+    //     let w = img.width() as usize;
+    //     let h = img.height() as usize;
+
+    //     if w < min_width || h < min_height {
+    //         // eprintln!(
+    //         //     "Undersized: {} wxh: {}x{} mins: {}x{} factor: {} normalize: {}",
+    //         //     img_path.display(),
+    //         //     w,
+    //         //     h,
+    //         //     min_width,
+    //         //     min_height,
+    //         //     factor,
+    //         //     normalize
+    //         // );
+    //         return Ok(None);
+    //     }
+
+    //     let mut imgs: Vec<Tensor<B, 3>> = Vec::with_capacity(sample_locs.len());
+
+    //     for (x, y) in sample_locs {
+    //         let x = x as u32;
+    //         let y = y as u32;
+    //         let img = img.crop_imm(x, y, x + min_width as u32, y + min_height as u32);
+
+    //         let new_w = min_width * factor;
+    //         let new_h = min_height * factor;
+
+    //         // Pre-upscale using a standard algorithm
+    //         let img = resize(&img, new_w as u32, new_h as u32, FilterType::Nearest);
+
+    //         let img = DynamicImage::ImageRgba8(img);
+
+    //         let bytes = img.into_rgb32f().into_vec();
+
+    //         let flat_tensor: Tensor<B, 1> = Tensor::from_floats(&bytes[..], dev);
+
+    //         // We know this because of the into_rgb32f() call which forces it to RGB
+    //         let c = 3usize;
+
+    //         // The data layout appears to be (w, h, c), see ImageBuffer::pixel_indices_unchecked
+    //         let img = flat_tensor.reshape([new_w, new_h, c]).slice([
+    //             Some((0i64, (min_width * factor) as i64)),
+    //             Some((0i64, (min_height * factor) as i64)),
+    //             None,
+    //         ]);
+
+    //         // 0:width
+    //         // 1:height
+    //         // 2:channels
+    //         let img = img.swap_dims(0, 2);
+
+    //         let img = img * if normalize { 255.0 } else { 1.0 };
+
+    //         // Set the root of autodiff here
+    //         let img = img.detach();
+
+    //         imgs.push(img);
+    //     }
+
+    //     let imgs: Tensor<B, 4> = Tensor::stack(imgs, 0);
+
+    //     println!("Loaded {}", img_path.display());
+
+    //     Ok(Some(imgs))
+    // }
 }
 
 impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
     fn batch(&self, items: Vec<ImageSRItem>) -> ImageSRBatch<B> {
+        println!("Building batch of {}", items.len());
         let mut small: Vec<Tensor<B, 3>> = Vec::with_capacity(items.len());
         let mut large: Vec<Tensor<B, 3>> = Vec::with_capacity(items.len());
 
-        let _small: Vec<Option<Tensor<B, 3>>> = items
-            .iter()
+        let both: Vec<Option<(Vec<Tensor<B, 3>>, Vec<Tensor<B, 3>>)>> = items
+            .into_iter()
             .map(|p| {
-                let r = self.load_cropped_img_as_tensor(
+                let r = Self::load_cropped_imgs_as_tensors(
                     &p.small_path,
+                    &p.large_path,
                     &self.device,
                     self.small_min_width,
                     self.small_min_height,
                     self.factor,
-                    true,
+                    self.samples,
                 );
-
                 match r {
                     Err(e) => {
                         eprintln!("Image load error: {}", e);
@@ -263,44 +408,29 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
             })
             .collect();
 
-        let _large: Vec<Option<Tensor<B, 3>>> = items
-            .into_iter()
-            .map(|p| {
-                let r = self.load_cropped_img_as_tensor(
-                    &p.large_path,
-                    &self.device,
-                    self.large_min_width,
-                    self.large_min_height,
-                    1,
-                    false,
-                );
-
-                match r {
-                    Err(e) => {
-                        eprintln!("Image load error: {}", e);
-                        None
-                    }
-                    Ok(t) => t,
-                }
-            })
-            .collect();
-
-        debug_assert_eq!(_small.len(), _large.len());
-
-        for (small_img, large_img) in std::iter::zip(_small, _large) {
-            if let Some(small_img) = small_img {
-                if let Some(large_img) = large_img {
-                    small.push(small_img);
-                    large.push(large_img);
-                } else {
-                    eprintln!("small ok, large bad");
-                }
-            } else if large_img.is_some() {
-                eprintln!("small bad, large ok");
+        for both_from_img in both {
+            if let Some(both_from_img) = both_from_img {
+                let (small_imgs, large_imgs) = both_from_img;
+                small.extend(small_imgs);
+                large.extend(large_imgs);
             } else {
-                // both bad, not surprising
+                // something was mis-sized, do nothing about it here
             }
         }
+        // for (small_img, large_img) in std::iter::zip(_small, _large) {
+        //     if let Some(small_img) = small_img {
+        //         if let Some(large_img) = large_img {
+        //             small.push(small_img);
+        //             large.push(large_img);
+        //         } else {
+        //             eprintln!("small ok, large bad");
+        //         }
+        //     } else if large_img.is_some() {
+        //         eprintln!("small bad, large ok");
+        //     } else {
+        //         // both bad, not surprising
+        //     }
+        // }
 
         let small = if small.is_empty() {
             None
@@ -314,7 +444,10 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
         };
 
         if let Some(small) = small.as_ref() {
+            println!("small shape: {:?}", small.shape());
+
             if let Some(large) = large.as_ref() {
+                println!("large shape: {:?}", large.shape());
                 assert_eq!(small.shape().dims[0], large.shape().dims[0]);
                 assert_eq!(small.shape().dims[1], large.shape().dims[1]);
             }
@@ -328,6 +461,8 @@ impl<B: Backend> Batcher<ImageSRItem, ImageSRBatch<B>> for ImageSRBatcher<B> {
             small.as_ref().map(|s| s.shape().dims[1]),
             large.as_ref().map(|l| l.shape().dims[1])
         );
+
+        println!("Built");
 
         ImageSRBatch { small, large }
     }
@@ -408,12 +543,38 @@ impl<B: Backend> Model<B> {
     fn upscale(&self, mut x: Tensor<B, 4>, train: bool) -> Tensor<B, 4> {
         // the input is in [0, 1]
 
-        for unit in &self.units {
-            x = unit.forward(x, train);
+        // println!("Are nans? {}", small.is_nan().any());
+
+        let mut x = self.deep.forward(small.clone());
+        if training {
+            x = self.dropout.forward(x);
+        }
+        let x = self.relu.forward(x);
+
+        let mut x = self.deeper.forward(x);
+        if training {
+            x = self.dropout.forward(x);
+        }
+        let x = self.relu.forward(x);
+
+        let mut x = self.deepest.forward(x);
+        if training {
+            x = self.dropout.forward(x);
         }
 
-        // output is in [0, 255]
-        x * 255.0
+        assert_eq!(small.shape(), x.shape());
+
+        // The skip/residual connection
+        let x = small + x;
+
+        // the output is in [0, 255]
+        self.sigmoid.forward(x) * 255.0
+
+        // small
+        // let x = self.deep.forward(small);
+
+        // self.deep.forward(small)
+        // self.deeper.forward(self.deep.forward(small))
     }
 }
 
@@ -428,9 +589,18 @@ impl ModelConfig {
     /// Returns the initialized model.
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         Model {
-            units: (0..self.units)
-                .map(|_| self.unit_config.init(device))
-                .collect(),
+            deep: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [1, 1])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            deeper: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            relu: Relu::new(),
+            sigmoid: Sigmoid::new(),
+            dropout: DropoutConfig::new(self.dropout).init(),
         }
     }
 }
@@ -440,7 +610,7 @@ pub struct ImageSRTrainingConfig {
     #[config(default = 100)]
     pub num_epochs: usize,
 
-    #[config(default = 4)]
+    #[config(default = 10)]
     pub batch_size: usize,
 
     #[config(default = 4)]
@@ -465,16 +635,10 @@ pub fn run<B: AutodiffBackend>(
     valid_large_dir: &Path,
     output_dir: &Path,
     factor: usize,
-    epochs: usize,
-    units: usize,
-    lr: f64,
+    samples_per_img: usize,
 ) {
-    let config_unit = ResUnitConfig::new();
-    let config_model = {
-        let mut c = ModelConfig::new(config_unit);
-        c.units = units;
-        c
-    };
+    println!("Running");
+    let config_model = ModelConfig { dropout: 0.2 };
     let config_optimizer = AdamConfig::new();
     let config = {
         let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
@@ -488,22 +652,24 @@ pub fn run<B: AutodiffBackend>(
     let mut model: Model<B> = config.model.init(device);
     let mut optim = config.optimizer.init::<B, Model<B>>();
 
+    println!("Optim");
+
     let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
         device: device.clone(),
-        small_min_width: W_SMALL,
-        small_min_height: H_SMALL,
-        large_min_width: W_LARGE,
-        large_min_height: H_LARGE,
+        small_min_width: SMALL_MIN_W,
+        small_min_height: SMALL_MIN_H,
         factor,
+        samples: samples_per_img,
     };
     let valid_batcher: ImageSRBatcher<B::InnerBackend> = ImageSRBatcher {
         device: device.clone(),
-        small_min_width: W_SMALL,
-        small_min_height: H_SMALL,
-        large_min_width: W_LARGE,
-        large_min_height: H_LARGE,
+        small_min_width: SMALL_MIN_W,
+        small_min_height: SMALL_MIN_H,
         factor,
+        samples: samples_per_img,
     };
+
+    println!("Batchers");
 
     let dataloader_train = DataLoaderBuilder::new(train_batcher)
         .batch_size(config.batch_size)
@@ -517,19 +683,29 @@ pub fn run<B: AutodiffBackend>(
         .num_workers(config.num_workers)
         .build(ImageSRDataset::load(valid_small_dir, valid_large_dir, 1, 0));
 
+    println!("Dataloaders");
+    stdout().flush().unwrap();
+
+    let recorder = NamedMpkGzFileRecorder::<FullPrecisionSettings>::new();
+
+    println!("Recorder");
+
     // Iterate over our training and validation loop for X epochs.
     for epoch in 1..config.num_epochs + 1 {
         // Implement our training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             if let Some(small) = batch.small {
                 if let Some(large) = batch.large {
+                    println!("Going to upscale");
                     let pred = model.upscale(small, true);
 
                     assert_eq!(pred.shape(), large.shape());
 
+                    println!("Going to loss");
+
                     let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
 
-                    print!(
+                    println!(
                         "\r[Train - Epoch {} - Iteration {}] Loss {:.3}          ",
                         epoch,
                         iteration,
@@ -539,12 +715,18 @@ pub fn run<B: AutodiffBackend>(
 
                     // Gradients for the current backward pass
                     let grads = loss.backward();
+                    println!("Backward");
+                    stdout().flush().unwrap();
 
                     // Gradients linked to each parameter of the model.
                     let grads = GradientsParams::from_grads(grads, &model);
+                    println!("Grads");
+                    stdout().flush().unwrap();
 
                     // Update the model using the optimizer.
                     model = optim.step(config.lr, model, grads);
+                    println!("Optim step");
+                    stdout().flush().unwrap();
                 } else {
                     eprintln!("large was None");
                 }
@@ -716,19 +898,25 @@ impl<B: Backend> From<ResUnit<B>> for ResUnitTensors<B> {
 
 #[derive(Clone)]
 struct ModelTensors<B: Backend> {
-    units: Vec<ResUnitTensors<B>>,
+    deep: Conv2dTensors<B>,
+    // deeper: Conv2dTensors<B>,
+    // deepest: Conv2dTensors<B>,
 }
 impl<B: Backend> ModelTensors<B> {
     fn to_device(self, dev: &B::Device) -> Self {
         Self {
-            units: self.units.into_iter().map(|u| u.to_device(dev)).collect(),
+            deep: self.deep.to_device(dev),
+            // deeper: self.deeper.to_device(dev),
+            // deepest: self.deepest.to_device(dev),
         }
     }
 }
 impl<B: Backend> From<Model<B>> for ModelTensors<B> {
     fn from(m: Model<B>) -> Self {
         Self {
-            units: m.units.into_iter().map(ResUnitTensors::from).collect(),
+            deep: Conv2dTensors::from(m.deep),
+            // deeper: Conv2dTensors::from(m.deeper),
+            // deepest: Conv2dTensors::from(m.deepest),
         }
     }
 }
@@ -744,9 +932,7 @@ fn run_multi(
     valid_large_dir: &Path,
     output_dir: &Path,
     factor: usize,
-    epochs: usize,
-    units: usize,
-    lr: f64,
+    samples_per_img: usize,
 ) {
     type B = Autodiff<Wgpu>;
     let config_unit = ResUnitConfig::new();
@@ -786,20 +972,18 @@ fn run_multi(
         thread::spawn(move || loop {
             let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
                 device: device.clone(),
-                small_min_width: W_SMALL,
-                small_min_height: H_SMALL,
-                large_min_width: W_LARGE,
-                large_min_height: H_LARGE,
+                small_min_width: SMALL_MIN_W,
+                small_min_height: SMALL_MIN_H,
                 factor,
+                samples: samples_per_img,
             };
             let valid_batcher: ImageSRBatcher<<B as AutodiffBackend>::InnerBackend> =
                 ImageSRBatcher {
                     device: device.clone(),
-                    small_min_width: W_SMALL,
-                    small_min_height: H_SMALL,
-                    large_min_width: W_LARGE,
-                    large_min_height: H_LARGE,
+                    small_min_width: SMALL_MIN_W,
+                    small_min_height: SMALL_MIN_H,
                     factor,
+                    samples: samples_per_img,
                 };
 
             let dataloader_train = DataLoaderBuilder::new(train_batcher)
@@ -885,30 +1069,37 @@ fn run_multi(
         models[gpu] = Some(gpu_model.to_device(&control_dev));
 
         let mut mean_model: Model<B> = config.model.init(&control_dev);
-
-        mean_model.units = mean_model
-            .units
-            .into_iter()
-            .enumerate()
-            .map(|(unit_idx, u)| {
-                let mut model_units: Vec<ResUnitTensors<B>> = Vec::with_capacity(models.len());
-                for m in &models {
-                    model_units.push(m.as_ref().unwrap().units[unit_idx].clone());
-                }
-                mean_resunit_from_parts(u, model_units, &control_dev)
-            })
-            .collect();
-
-        write_state(epoch, mean_model.clone(), output_dir);
+        mean_model.deep = mean_conv2d_from_parts(
+            mean_model.deep,
+            models
+                .iter()
+                .map(|m| m.as_ref().unwrap().deep.clone())
+                .collect(),
+            &control_dev,
+        );
+        // mean_model.deeper = mean_conv2d_from_parts(
+        //     mean_model.deeper,
+        //     models
+        //         .iter()
+        //         .map(|m| m.as_ref().unwrap().deeper.clone())
+        //         .collect(),
+        //     &control_dev,
+        // );
+        // mean_model.deepest = mean_conv2d_from_parts(
+        //     mean_model.deepest,
+        //     models
+        //         .iter()
+        //         .map(|m| m.as_ref().unwrap().deepest.clone())
+        //         .collect(),
+        //     &control_dev,
+        // );
     }
 }
 
 fn main() -> Result<(), walkdir::Error> {
     let cli = Cli::parse();
 
-    type B = Wgpu<f32, i32>;
-
-    match cli.command {
+    match &cli.command {
         Commands::Train {
             train_small_dir,
             train_large_dir,
@@ -918,40 +1109,30 @@ fn main() -> Result<(), walkdir::Error> {
             lr,
             epochs,
             factor,
-            units,
+            samples_per_img,
             dev,
         } => {
-            assert!(!dev.is_empty());
+            let d = &dev[0];
+            type B = JitBackend<WgpuRuntime, f32, i32>;
 
-            if dev.len() == 1 {
-                let mut dev = dev;
-                let dev = dev.pop().unwrap();
-                run::<Autodiff<B>>(
-                    &dev,
-                    &train_small_dir,
-                    &train_large_dir,
-                    &valid_small_dir,
-                    &valid_large_dir,
-                    &output_dir,
-                    factor,
-                    epochs,
-                    units,
-                    lr,
-                );
-            } else {
-                run_multi(
-                    dev,
-                    &train_small_dir,
-                    &train_large_dir,
-                    &valid_small_dir,
-                    &valid_large_dir,
-                    &output_dir,
-                    factor,
-                    epochs,
-                    units,
-                    lr,
-                )
+            // burn::backend::wgpu::init_sync::<burn::backend::wgpu::OpenGl>(d, Default::default());
+
+            // type B = Wgpu<f32, i32>;
+
+            if dev.len() > 1 {
+                eprintln!("Only using the first device ({:?})", d);
             }
+
+            run::<Autodiff<B>>(
+                d,
+                train_small_dir,
+                train_large_dir,
+                valid_small_dir,
+                valid_large_dir,
+                output_dir,
+                *factor,
+                *samples_per_img,
+            );
         }
     }
 

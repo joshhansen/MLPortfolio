@@ -2105,7 +2105,7 @@ dependencies = [
  "burn",
  "clap",
  "image",
- "lazy_static",
+ "rand",
  "walkdir",
 ]
 
