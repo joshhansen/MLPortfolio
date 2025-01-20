@@ -7,8 +7,8 @@ import tensorflow_text as tft
 from grapheme_idx import GraphemeIdx, load_grapheme_idx
 from wptitles import wp_titles_dataset
 
-BATCH=10
-MAX_STR_LEN = 32
+BATCH=1250
+MAX_STR_LEN = 128
 
 def positional_encoding(length: int, depth: float):
   depth = depth/2
@@ -108,13 +108,35 @@ class Encoder(tf.keras.layers.Layer):
 
   return x
 
-class Decoder(tf.keras.layers.Layer):
- def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
+class Dec(tf.keras.layers.Layer):
+ def __init__(self, *, num_heads: int, emb: int):
   super().__init__()
   self.mha = tf.keras.layers.MultiHeadAttention(
    num_heads=num_heads,
    key_dim=emb,
   )
+  self.layernorm = tf.keras.layers.LayerNormalization()
+  self.add = tf.keras.layers.Add()
+
+
+ def call(self, x: tf.Tensor):
+  attn = self.mha(
+   query=x,
+   value=x,
+   key=x,
+  )
+  x = self.add([x, attn])
+  x = self.layernorm(x)
+
+  return x
+  
+ 
+
+class Decoder(tf.keras.layers.Layer):
+ def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
+  super().__init__()
+  self.pos_encoding = positional_encoding(length=2048, depth=emb)
+  self.dec = Dec(num_heads=num_heads, emb=emb)
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
 
@@ -136,14 +158,11 @@ class Decoder(tf.keras.layers.Layer):
   # print(f"Dec x shape2': {x.get_shape()}")
   # print(x)
 
-  x = self.mha(
-   query=x,
-   value=x,
-   key=x,
-  )
+  # Augment with a position encoding
+  length = x.get_shape()[1]
+  x = x + self.pos_encoding[tf.newaxis, :length, :]
 
-  # (batch, seq, emb)
-  # print(f"Dec x shape3: {x.get_shape()}")
+  x = self.dec(x)
 
   x = self.emb_to_vocab(x)
 
@@ -185,9 +204,12 @@ if __name__=="__main__":
   grapheme_idx = load_grapheme_idx()
   print(grapheme_idx)
 
-  wptitles_train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.gz')
-  wptitles_valid_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.gz')
-  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.gz')
+  # data_path = os.path.join(home_dir, 'Data')
+  data_path = '/blok/@data'
+
+  wptitles_train_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.rand.gz')
+  wptitles_valid_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.rand.gz')
+  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.rand.gz')
 
   tokenizer = tft.WhitespaceTokenizer()
   train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
