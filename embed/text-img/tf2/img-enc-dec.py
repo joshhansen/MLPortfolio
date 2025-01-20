@@ -7,6 +7,8 @@ from tensorflow.keras.layers import Conv2D
 from images import images_dataset
 
 BATCH=10
+W=256
+H=256
 
 def positional_encoding(length: int, depth: float):
   depth = depth/2
@@ -80,9 +82,10 @@ class Encoder(tf.keras.layers.Layer):
  def call(self, x: tf.Tensor):
   # (batch, seq)
 
+  # print(x.get_shape())
   batch, w, h, c = x.get_shape()
 
-  print(f"batch, w, h, c: {batch} {w} {h} {c}")
+  # print(f"batch, w, h, c: {batch} {w} {h} {c}")
 
   # w_emb = self.dim_encoding[:w, :]
   # h_emb = self.dim_encoding[:h, :]
@@ -92,7 +95,7 @@ class Encoder(tf.keras.layers.Layer):
   for conv in self.convs:
    x = conv(x)
 
-  print(x.get_shape())
+  # print(x.get_shape())
   batch = x.get_shape()[0]
 
   x = tf.reshape(x, (batch, self.emb_size,))
@@ -102,11 +105,11 @@ class Encoder(tf.keras.layers.Layer):
   return x
 
 class Decoder(tf.keras.layers.Layer):
- def __init__(self, *, emb: int):
+ def __init__(self, *, emb: int, w: int, h: int):
   super().__init__()
   self.emb_size = emb
-  self.width_model = tf.keras.layers.Dense(1, activation='softplus')
-  self.height_model = tf.keras.layers.Dense(1, activation='softplus')
+  self.w = w
+  self.h = h
   self.convs = [
    ResConvNorm(64, (64, 64), padding='same'),
    ResConvNorm(32, (32, 32), padding='same'),
@@ -122,44 +125,22 @@ class Decoder(tf.keras.layers.Layer):
  def call(self, x: tf.Tensor):
   batch = x.get_shape()[0]
   
-  w = tf.round(self.width_model(x)).numpy()
-  h = tf.round(self.height_model(x)).numpy()
+  # Use the emb vector as the channels of a w x h sized image
+  x = tf.tile(x, (1, self.w * self.h,))
+  # (batch, w*h*emb)
 
-  print(f"w: {w}")
-  print(f"h: {h}")
-
-  # Work around the ragged shape by reshaping each image individually
-  # (tf.tile can only do one at a time)
-  images: list[tf.Tensor] = list()
-
-  for i in range(batch):
-   w_ = int(w[i][0])
-   h_ = int(h[i][0])
-
-   # Use the emb vector as the channels of a w x h sized image
-   img = tf.tile(x[i], (w_ * h_,))
-   # (w*h*emb)
-
-   img = tf.reshape(img, (1, w_, h_, self.emb_size))
-   # (batch, w, h, emb)
-
-   #NOTE Do we need to add a 2d position embedding here to give it its bearings on the image?
-
-   for conv in self.convs:
-    img = conv(img)
-
-   img = tf.reshape(img, (w_, h_, self.emb_size))
-   # (w, h, emb)
-
-   images.append(img)
-
-  x = tf.ragged.stack(images)
+  x = tf.reshape(x, (batch, self.w, self.h, self.emb_size))
   # (batch, w, h, emb)
+
+  #NOTE Do we need to add a 2d position embedding here to give it its bearings on the image?
+
+  for conv in self.convs:
+   x = conv(x)
 
   return x
 
 class EncDec(tf.keras.Model):
- def __init__(self, *, emb:int):
+ def __init__(self, *, emb:int, w:int, h:int):
   super().__init__()
 
   self.enc = Encoder(
@@ -167,6 +148,8 @@ class EncDec(tf.keras.Model):
   )
   self.dec = Decoder(
    emb=emb,
+   w=w,
+   h=h
   )
 
  def call(self, x: tf.Tensor):
@@ -177,20 +160,27 @@ class EncDec(tf.keras.Model):
 if __name__=="__main__":
   home_dir = os.path.expanduser('~')
 
-  path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-hires-png')
+  train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-downscaled2_mini', 's100', 'q90')
 
-  train = images_dataset(path, 'train')
-  valid = images_dataset(path, 'valid')
+  # train = images_dataset(path, 'train')
+  # valid = images_dataset(path, 'valid')
+
+  train = tf.keras.preprocessing.image_dataset_from_directory(
+   train_path,
+   labels=None,
+   batch_size=BATCH,
+   image_size=(W,H),
+  )
 
   print(f"First train: {next(iter(train))}")
-  print(f"First valid: {next(iter(valid))}")
+  # print(f"First valid: {next(iter(valid))}")
 
   # Make the datum both input and output
   # train = train.map(lambda s: (s, s))
   # valid = valid.map(lambda s: (s, s))
 
-  train = train.ragged_batch(BATCH, drop_remainder=True)
-  valid = valid.ragged_batch(BATCH, drop_remainder=True)
+  # train = train.batch(BATCH, drop_remainder=True)
+  # valid = valid.ragged_batch(BATCH, drop_remainder=True)
   # test = test.ragged_batch(BATCH, drop_remainder=True)
 
   # num_layers = 4
@@ -202,6 +192,8 @@ if __name__=="__main__":
 
   m = EncDec(
    emb=d_model,
+   w=W,
+   h=H
   )
 
   x = next(iter(train))
@@ -240,4 +232,8 @@ if __name__=="__main__":
    run_eagerly=True,
   )
 
-  m.fit(train, epochs=20, validation_data=valid)
+  m.fit(
+   train,
+   epochs=20,
+   # validation_data=valid
+  )
