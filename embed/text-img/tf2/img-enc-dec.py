@@ -7,7 +7,6 @@ from tensorflow.keras.layers import Conv2D
 from images import images_dataset
 
 BATCH=10
-MAX_STR_LEN = 32
 
 def positional_encoding(length: int, depth: float):
   depth = depth/2
@@ -24,36 +23,37 @@ def positional_encoding(length: int, depth: float):
 
   return tf.cast(pos_encoding, dtype=tf.float32)
 
-class PositionalEmbedding(tf.keras.layers.Layer):
- def __init__(self, *, vocab_size: int, emb: int):
-  super().__init__()
-  self.emb_size = emb
-  self.embedding = tf.keras.layers.Embedding(vocab_size, emb, mask_zero=True) 
-  self.pos_encoding = positional_encoding(length=2048, depth=emb)
+# class PositionalEmbedding(tf.keras.layers.Layer):
+#  def __init__(self, *, vocab_size: int, emb: int):
+#   super().__init__()
+#   self.emb_size = emb
+#   self.embedding = tf.keras.layers.Embedding(vocab_size, emb, mask_zero=True) 
+#   self.pos_encoding = positional_encoding(length=2048, depth=emb)
 
- def compute_mask(self, *args, **kwargs):
-  return self.embedding.compute_mask(*args, **kwargs)
+#  def compute_mask(self, *args, **kwargs):
+#   return self.embedding.compute_mask(*args, **kwargs)
 
- def call(self, x: tf.Tensor):
-  # print(f"x.get_shape: {x.get_shape()}")
-  length = x.get_shape()[1]
-  # print(f"x.get_shape()[1]: {x.get_shape()[1]}")
-  x = self.embedding(x)
-  # This factor sets the relative scale of the embedding and positonal_encoding.
-  x *= tf.math.sqrt(tf.cast(self.emb_size, tf.float32))
-  x = x + self.pos_encoding[tf.newaxis, :length, :]
-  return x
+#  def call(self, x: tf.Tensor):
+#   # print(f"x.get_shape: {x.get_shape()}")
+#   length = x.get_shape()[1]
+#   # print(f"x.get_shape()[1]: {x.get_shape()[1]}")
+#   x = self.embedding(x)
+#   # This factor sets the relative scale of the embedding and positonal_encoding.
+#   x *= tf.math.sqrt(tf.cast(self.emb_size, tf.float32))
+#   x = x + self.pos_encoding[tf.newaxis, :length, :]
+#   return x
 
 
 class ResConvNorm(tf.keras.layers.Layer):
  def __init__(self, filters: int,  shape: tuple, **kwargs):
+  super().__init__()
   self.conv = Conv2D(filters, shape, **kwargs)
   self.layernorm = tf.keras.layers.LayerNormalization()
 
  def call(self, x: tf.Tensor):
   original = x
   x = self.conv(x)
-  x += original
+
   x = self.layernorm(x)
   return x
 
@@ -64,13 +64,13 @@ class Encoder(tf.keras.layers.Layer):
   self.dim_encoding = positional_encoding(length=2048, depth=emb)
 
   self.convs = [
-   ResConvNorm(3, (64, 64)),
-   ResConvNorm(4, (32, 32)),
-   ResConvNorm(8, (16, 16)),
-   ResConvNorm(16, (8, 8)),
-   ResConvNorm(32, (4, 4)),
-   ResConvNorm(64, (2, 2)),
-   ResConvNorm(128, (1, 1)),
+   ResConvNorm(3, (65, 65)),
+   ResConvNorm(4, (33, 33)),
+   ResConvNorm(8, (17, 17)),
+   ResConvNorm(16, (9, 9)),
+   ResConvNorm(32, (5, 5)),
+   ResConvNorm(64, (3, 3)),
+   ResConvNorm(128, (2, 2)),
   ]
 
   self.emb_size = emb
@@ -82,17 +82,24 @@ class Encoder(tf.keras.layers.Layer):
 
   batch, w, h, c = x.get_shape()
 
-  w_emb = self.dim_encoding[tf.new_axis, :w, :]
-  h_emb = self.dim_encoding[tf.new_axis, :h, :]
+  print(f"batch, w, h, c: {batch} {w} {h} {c}")
 
-  x = tf.image.resize(x, (batch, 128, 128, c))  
+  # w_emb = self.dim_encoding[:w, :]
+  # h_emb = self.dim_encoding[:h, :]
+
+  x = tf.image.resize(x, (128, 128))
 
   for conv in self.convs:
    x = conv(x)
 
-  x = tf.reshape(x, (self.emb_size,))
+  print(x.get_shape())
+  batch = x.get_shape()[0]
 
-  return w_emb + h_emb + x
+  x = tf.reshape(x, (batch, self.emb_size,))
+
+  # return w_emb + x#  h_emb + 
+  # TODO Maybe add width and depth positional encoding
+  return x
 
 class Decoder(tf.keras.layers.Layer):
  def __init__(self, *, emb: int):
@@ -118,17 +125,36 @@ class Decoder(tf.keras.layers.Layer):
   w = tf.round(self.width_model(x)).numpy()
   h = tf.round(self.height_model(x)).numpy()
 
-  # Use the emb vector as the channels of a w x h sized image
-  x = tf.tile(x, (1, w*h))
-  # (batch, w*h*emb)
+  print(f"w: {w}")
+  print(f"h: {h}")
 
-  x = tf.reshape(x, (batch, w, h, self.emb_size))
+  # Work around the ragged shape by reshaping each image individually
+  # (tf.tile can only do one at a time)
+  images: list[tf.Tensor] = list()
+
+  for i in range(batch):
+   w_ = int(w[i][0])
+   h_ = int(h[i][0])
+
+   # Use the emb vector as the channels of a w x h sized image
+   img = tf.tile(x[i], (w_ * h_,))
+   # (w*h*emb)
+
+   img = tf.reshape(img, (1, w_, h_, self.emb_size))
+   # (batch, w, h, emb)
+
+   #NOTE Do we need to add a 2d position embedding here to give it its bearings on the image?
+
+   for conv in self.convs:
+    img = conv(img)
+
+   img = tf.reshape(img, (w_, h_, self.emb_size))
+   # (w, h, emb)
+
+   images.append(img)
+
+  x = tf.ragged.stack(images)
   # (batch, w, h, emb)
-
-  #NOTE Do we need to add a 2d position embedding here to give it its bearings on the image?
-
-  for conv in self.convs:
-   x = conv(x)
 
   return x
 
