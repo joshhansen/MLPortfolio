@@ -7,8 +7,8 @@ from tensorflow.keras.layers import Conv2D
 from images import images_dataset
 
 BATCH=10
-W=256
-H=256
+W=128
+H=128
 
 def positional_encoding(length: int, depth: float):
   depth = depth/2
@@ -81,6 +81,10 @@ class Encoder(tf.keras.layers.Layer):
  # (batch, w, h, c)
  def call(self, x: tf.Tensor):
   # (batch, seq)
+  # print(inputs)
+
+  if type(x) == tuple:
+   x,y = x
 
   # print(x.get_shape())
   batch, w, h, c = x.get_shape()
@@ -90,13 +94,13 @@ class Encoder(tf.keras.layers.Layer):
   # w_emb = self.dim_encoding[:w, :]
   # h_emb = self.dim_encoding[:h, :]
 
-  x = tf.image.resize(x, (128, 128))
+  # x = tf.image.resize(x, (W, H))
 
   for conv in self.convs:
    x = conv(x)
 
   # print(x.get_shape())
-  batch = x.get_shape()[0]
+  # batch = x.get_shape()[0]
 
   x = tf.reshape(x, (batch, self.emb_size,))
 
@@ -158,9 +162,11 @@ class EncDec(tf.keras.Model):
   
 
 if __name__=="__main__":
-  home_dir = os.path.expanduser('~')
+  data_dir = '/blok/@data'
+  # data_dir = os.path.join(os.path.expanduser('~'), 'Data')
 
-  train_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'wikimedia-commons-downscaled2_mini', 's100', 'q90')
+  train_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's100', 'train', 'small')
+  valid_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's100', 'valid', 'small')
 
   # train = images_dataset(path, 'train')
   # valid = images_dataset(path, 'valid')
@@ -171,17 +177,24 @@ if __name__=="__main__":
    batch_size=BATCH,
    image_size=(W,H),
   )
+  valid = tf.keras.preprocessing.image_dataset_from_directory(
+   valid_path,
+   labels=None,
+   batch_size=BATCH,
+   image_size=(W,H),
+  )
 
-  print(f"First train: {next(iter(train))}")
   # print(f"First valid: {next(iter(valid))}")
 
   # Make the datum both input and output
-  # train = train.map(lambda s: (s, s))
-  # valid = valid.map(lambda s: (s, s))
+  train = train.map(lambda s: (s, s))
+  valid = valid.map(lambda s: (s, s))
 
   # train = train.batch(BATCH, drop_remainder=True)
   # valid = valid.ragged_batch(BATCH, drop_remainder=True)
   # test = test.ragged_batch(BATCH, drop_remainder=True)
+
+  print(f"First train: {next(iter(train))}")
 
   # num_layers = 4
   d_model = 128
@@ -221,19 +234,19 @@ if __name__=="__main__":
   # print(y_emb)
   optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
                                      epsilon=1e-9)
-  loss = tf.keras.losses.SparseCategoricalCrossentropy(
+  # loss = tf.keras.losses.SparseCategoricalCrossentropy(
     # from_logits=True,
     # reduction='none'
-  )
+  # )
 
   m.compile(
-   loss=loss,
-   optimizer=optimizer,
+   loss='categorical_crossentropy',
+   optimizer='adam',
    run_eagerly=True,
   )
 
   m.fit(
    train,
    epochs=20,
-   # validation_data=valid
+   validation_data=valid
   )
