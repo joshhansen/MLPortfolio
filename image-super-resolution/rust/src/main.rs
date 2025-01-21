@@ -18,7 +18,7 @@ use burn::{
     nn::{conv::Conv2d, loss::Reduction, Dropout, Relu},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    record::{FullPrecisionSettings, NamedMpkGzFileRecorder},
+    record::{FileRecorder, FullPrecisionSettings, NamedMpkGzFileRecorder},
     tensor::{backend::AutodiffBackend, cast::ToElement, BasicOps, Numeric, TensorKind},
 };
 use clap::{Parser, Subcommand};
@@ -36,9 +36,16 @@ const SMALL_MIN_H: usize = 70;
 
 const INTERMEDIATE_FEATURES: usize = 16;
 
-lazy_static::lazy_static! {
-    static ref RECORDER: NamedMpkGzFileRecorder<FullPrecisionSettings> =
-        NamedMpkGzFileRecorder::new();
+fn write_state<B: Backend>(epoch: usize, model: Model<B>, output_dir: &Path) {
+    let path = {
+        let mut p = output_dir.to_path_buf();
+        p.push(epoch.to_string());
+        p
+    };
+
+    let recorder: NamedMpkGzFileRecorder<FullPrecisionSettings> = NamedMpkGzFileRecorder::new();
+
+    model.save_file(path, &recorder).unwrap();
 }
 
 #[derive(Parser)]
@@ -63,10 +70,6 @@ enum Commands {
 
         #[arg(long, default_value_t = 100)]
         epochs: usize,
-
-        /// Moving average window for reporting
-        #[arg(long, default_value_t = 100)]
-        recent_window: usize,
 
         #[arg(long, short = 'd', default_value = "0", value_parser = parse_device)]
         dev: Vec<WgpuDevice>,
@@ -491,6 +494,7 @@ impl<B: Backend> ResUnit<B> {
 
         assert_eq!(skip.shape(), x.shape());
 
+        // The skip/residual connection
         x = skip + x;
 
         self.sigmoid.forward(x)
@@ -543,38 +547,12 @@ impl<B: Backend> Model<B> {
     fn upscale(&self, mut x: Tensor<B, 4>, train: bool) -> Tensor<B, 4> {
         // the input is in [0, 1]
 
-        // println!("Are nans? {}", small.is_nan().any());
-
-        let mut x = self.deep.forward(small.clone());
-        if training {
-            x = self.dropout.forward(x);
+        for u in &self.units {
+            x = u.forward(x, train);
         }
-        let x = self.relu.forward(x);
-
-        let mut x = self.deeper.forward(x);
-        if training {
-            x = self.dropout.forward(x);
-        }
-        let x = self.relu.forward(x);
-
-        let mut x = self.deepest.forward(x);
-        if training {
-            x = self.dropout.forward(x);
-        }
-
-        assert_eq!(small.shape(), x.shape());
-
-        // The skip/residual connection
-        let x = small + x;
 
         // the output is in [0, 255]
-        self.sigmoid.forward(x) * 255.0
-
-        // small
-        // let x = self.deep.forward(small);
-
-        // self.deep.forward(small)
-        // self.deeper.forward(self.deep.forward(small))
+        x * 255.0
     }
 }
 
@@ -589,18 +567,9 @@ impl ModelConfig {
     /// Returns the initialized model.
     pub fn init<B: Backend>(&self, device: &B::Device) -> Model<B> {
         Model {
-            deep: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [1, 1])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            deeper: Conv2dConfig::new([3, INTERMEDIATE_FEATURES], [3, 3])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            deepest: Conv2dConfig::new([INTERMEDIATE_FEATURES, 3], [3, 3])
-                .with_padding(PaddingConfig2d::Same)
-                .init(device),
-            relu: Relu::new(),
-            sigmoid: Sigmoid::new(),
-            dropout: DropoutConfig::new(self.dropout).init(),
+            units: (0..self.units)
+                .map(|_| self.unit_config.init(device))
+                .collect(),
         }
     }
 }
@@ -636,9 +605,14 @@ pub fn run<B: AutodiffBackend>(
     output_dir: &Path,
     factor: usize,
     samples_per_img: usize,
+    epochs: usize,
+    lr: f64,
 ) {
     println!("Running");
-    let config_model = ModelConfig { dropout: 0.2 };
+    let config_model = ModelConfig {
+        units: 1,
+        unit_config: ResUnitConfig { dropout: 0.2 },
+    };
     let config_optimizer = AdamConfig::new();
     let config = {
         let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
@@ -896,205 +870,205 @@ impl<B: Backend> From<ResUnit<B>> for ResUnitTensors<B> {
     }
 }
 
-#[derive(Clone)]
-struct ModelTensors<B: Backend> {
-    deep: Conv2dTensors<B>,
-    // deeper: Conv2dTensors<B>,
-    // deepest: Conv2dTensors<B>,
-}
-impl<B: Backend> ModelTensors<B> {
-    fn to_device(self, dev: &B::Device) -> Self {
-        Self {
-            deep: self.deep.to_device(dev),
-            // deeper: self.deeper.to_device(dev),
-            // deepest: self.deepest.to_device(dev),
-        }
-    }
-}
-impl<B: Backend> From<Model<B>> for ModelTensors<B> {
-    fn from(m: Model<B>) -> Self {
-        Self {
-            deep: Conv2dTensors::from(m.deep),
-            // deeper: Conv2dTensors::from(m.deeper),
-            // deepest: Conv2dTensors::from(m.deepest),
-        }
-    }
-}
+// #[derive(Clone)]
+// struct ModelTensors<B: Backend> {
+//     deep: Conv2dTensors<B>,
+//     // deeper: Conv2dTensors<B>,
+//     // deepest: Conv2dTensors<B>,
+// }
+// impl<B: Backend> ModelTensors<B> {
+//     fn to_device(self, dev: &B::Device) -> Self {
+//         Self {
+//             deep: self.deep.to_device(dev),
+//             // deeper: self.deeper.to_device(dev),
+//             // deepest: self.deepest.to_device(dev),
+//         }
+//     }
+// }
+// impl<B: Backend> From<Model<B>> for ModelTensors<B> {
+//     fn from(m: Model<B>) -> Self {
+//         Self {
+//             deep: Conv2dTensors::from(m.deep),
+//             // deeper: Conv2dTensors::from(m.deeper),
+//             // deepest: Conv2dTensors::from(m.deepest),
+//         }
+//     }
+// }
 
-use std::sync::mpsc::channel;
-use std::sync::RwLock;
-use std::thread;
-fn run_multi(
-    devices: Vec<WgpuDevice>,
-    train_small_dir: &Path,
-    train_large_dir: &Path,
-    valid_small_dir: &Path,
-    valid_large_dir: &Path,
-    output_dir: &Path,
-    factor: usize,
-    samples_per_img: usize,
-) {
-    type B = Autodiff<Wgpu>;
-    let config_unit = ResUnitConfig::new();
-    let config_model = {
-        let mut c = ModelConfig::new(config_unit);
-        c.units = units;
-        c
-    };
+// use std::sync::mpsc::channel;
+// use std::sync::RwLock;
+// use std::thread;
+// fn run_multi(
+//     devices: Vec<WgpuDevice>,
+//     train_small_dir: &Path,
+//     train_large_dir: &Path,
+//     valid_small_dir: &Path,
+//     valid_large_dir: &Path,
+//     output_dir: &Path,
+//     factor: usize,
+//     samples_per_img: usize,
+// ) {
+//     type B = Autodiff<Wgpu>;
+//     let config_unit = ResUnitConfig::new();
+//     let config_model = {
+//         let mut c = ModelConfig::new(config_unit);
+//         c.units = units;
+//         c
+//     };
 
-    let config_optimizer = AdamConfig::new();
-    let config = {
-        let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
-        c.lr = lr;
-        c.num_epochs = epochs;
-        c
-    };
+//     let config_optimizer = AdamConfig::new();
+//     let config = {
+//         let mut c = ImageSRTrainingConfig::new(config_model, config_optimizer);
+//         c.lr = lr;
+//         c.num_epochs = epochs;
+//         c
+//     };
 
-    B::seed(config.seed);
+//     B::seed(config.seed);
 
-    let control_dev = WgpuDevice::Cpu;
-    let shared_deep: Arc<RwLock<ModelTensors<B>>> = Arc::new(RwLock::new(ModelTensors::from(
-        config.model.init(&control_dev),
-    )));
-    let (tx, rx) = channel();
-    for gpu in 0..devices.len() {
-        let tx = tx.clone();
-        let devices = devices.clone();
-        let config = config.clone();
-        let train_small_dir = train_small_dir.to_path_buf();
-        let train_large_dir = train_large_dir.to_path_buf();
-        let valid_small_dir = valid_small_dir.to_path_buf();
-        let valid_large_dir = valid_large_dir.to_path_buf();
+//     let control_dev = WgpuDevice::Cpu;
+//     let shared_deep: Arc<RwLock<ModelTensors<B>>> = Arc::new(RwLock::new(ModelTensors::from(
+//         config.model.init(&control_dev),
+//     )));
+//     let (tx, rx) = channel();
+//     for gpu in 0..devices.len() {
+//         let tx = tx.clone();
+//         let devices = devices.clone();
+//         let config = config.clone();
+//         let train_small_dir = train_small_dir.to_path_buf();
+//         let train_large_dir = train_large_dir.to_path_buf();
+//         let valid_small_dir = valid_small_dir.to_path_buf();
+//         let valid_large_dir = valid_large_dir.to_path_buf();
 
-        let device = devices[gpu].clone();
-        let mut optim = config.optimizer.init::<B, Model<B>>();
-        let mut model: Model<B> = config.model.init(&device);
-        thread::spawn(move || loop {
-            let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
-                device: device.clone(),
-                small_min_width: SMALL_MIN_W,
-                small_min_height: SMALL_MIN_H,
-                factor,
-                samples: samples_per_img,
-            };
-            let valid_batcher: ImageSRBatcher<<B as AutodiffBackend>::InnerBackend> =
-                ImageSRBatcher {
-                    device: device.clone(),
-                    small_min_width: SMALL_MIN_W,
-                    small_min_height: SMALL_MIN_H,
-                    factor,
-                    samples: samples_per_img,
-                };
+//         let device = devices[gpu].clone();
+//         let mut optim = config.optimizer.init::<B, Model<B>>();
+//         let mut model: Model<B> = config.model.init(&device);
+//         thread::spawn(move || loop {
+//             let train_batcher: ImageSRBatcher<B> = ImageSRBatcher {
+//                 device: device.clone(),
+//                 small_min_width: SMALL_MIN_W,
+//                 small_min_height: SMALL_MIN_H,
+//                 factor,
+//                 samples: samples_per_img,
+//             };
+//             let valid_batcher: ImageSRBatcher<<B as AutodiffBackend>::InnerBackend> =
+//                 ImageSRBatcher {
+//                     device: device.clone(),
+//                     small_min_width: SMALL_MIN_W,
+//                     small_min_height: SMALL_MIN_H,
+//                     factor,
+//                     samples: samples_per_img,
+//                 };
 
-            let dataloader_train = DataLoaderBuilder::new(train_batcher)
-                .batch_size(config.batch_size)
-                .shuffle(config.seed)
-                .num_workers(config.num_workers)
-                .build(ImageSRDataset::load(
-                    &train_small_dir,
-                    &train_large_dir,
-                    devices.len(),
-                    gpu,
-                ));
+//             let dataloader_train = DataLoaderBuilder::new(train_batcher)
+//                 .batch_size(config.batch_size)
+//                 .shuffle(config.seed)
+//                 .num_workers(config.num_workers)
+//                 .build(ImageSRDataset::load(
+//                     &train_small_dir,
+//                     &train_large_dir,
+//                     devices.len(),
+//                     gpu,
+//                 ));
 
-            let dataloader_test = DataLoaderBuilder::new(valid_batcher)
-                .batch_size(config.batch_size)
-                .shuffle(config.seed)
-                .num_workers(config.num_workers)
-                .build(ImageSRDataset::load(
-                    &valid_small_dir,
-                    &valid_large_dir,
-                    devices.len(),
-                    gpu,
-                ));
+//             let dataloader_test = DataLoaderBuilder::new(valid_batcher)
+//                 .batch_size(config.batch_size)
+//                 .shuffle(config.seed)
+//                 .num_workers(config.num_workers)
+//                 .build(ImageSRDataset::load(
+//                     &valid_small_dir,
+//                     &valid_large_dir,
+//                     devices.len(),
+//                     gpu,
+//                 ));
 
-            // Iterate over our training and validation loop for X epochs.
-            for epoch in 1..config.num_epochs + 1 {
-                // Implement our training loop.
-                for (iteration, batch) in dataloader_train.iter().enumerate() {
-                    if let Some(small) = batch.small {
-                        if let Some(large) = batch.large {
-                            let pred = model.upscale(small, true);
-                            let loss = MseLoss::new().forward(pred, large, Reduction::Mean);
+//             // Iterate over our training and validation loop for X epochs.
+//             for epoch in 1..config.num_epochs + 1 {
+//                 // Implement our training loop.
+//                 for (iteration, batch) in dataloader_train.iter().enumerate() {
+//                     if let Some(small) = batch.small {
+//                         if let Some(large) = batch.large {
+//                             let pred = model.upscale(small, true);
+//                             let loss = MseLoss::new().forward(pred, large, Reduction::Mean);
 
-                            print!(
-                                "\r[Train - Epoch {} - Iteration {}] Loss {:.3}",
-                                epoch,
-                                iteration,
-                                loss.clone().into_scalar(),
-                            );
-                            stdout().flush().unwrap();
+//                             print!(
+//                                 "\r[Train - Epoch {} - Iteration {}] Loss {:.3}",
+//                                 epoch,
+//                                 iteration,
+//                                 loss.clone().into_scalar(),
+//                             );
+//                             stdout().flush().unwrap();
 
-                            // Gradients for the current backward pass
-                            let grads = loss.backward();
+//                             // Gradients for the current backward pass
+//                             let grads = loss.backward();
 
-                            // Gradients linked to each parameter of the model.
-                            let grads = GradientsParams::from_grads(grads, &model);
+//                             // Gradients linked to each parameter of the model.
+//                             let grads = GradientsParams::from_grads(grads, &model);
 
-                            // Update the model using the optimizer.
-                            model = optim.step(config.lr, model, grads);
+//                             // Update the model using the optimizer.
+//                             model = optim.step(config.lr, model, grads);
 
-                            tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
-                        }
-                    }
-                }
+//                             tx.send((gpu, ModelTensors::from(model.clone()))).unwrap();
+//                         }
+//                     }
+//                 }
 
-                // Get the model without autodiff.
-                let model_valid = model.valid();
+//                 // Get the model without autodiff.
+//                 let model_valid = model.valid();
 
-                // Implement our validation loop.
-                for (iteration, batch) in dataloader_test.iter().enumerate() {
-                    if let Some(small) = batch.small {
-                        if let Some(large) = batch.large {
-                            let pred = model_valid.upscale(small, false);
-                            let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
+//                 // Implement our validation loop.
+//                 for (iteration, batch) in dataloader_test.iter().enumerate() {
+//                     if let Some(small) = batch.small {
+//                         if let Some(large) = batch.large {
+//                             let pred = model_valid.upscale(small, false);
+//                             let loss = MseLoss::new().forward(pred.clone(), large, Reduction::Mean);
 
-                            print!(
-                                "\r[Valid - Epoch {} - Iteration {}] Loss {}",
-                                epoch,
-                                iteration,
-                                loss.clone().into_scalar(),
-                            );
-                            stdout().flush().unwrap();
-                        }
-                    }
-                }
-            }
-        });
-    }
+//                             print!(
+//                                 "\r[Valid - Epoch {} - Iteration {}] Loss {}",
+//                                 epoch,
+//                                 iteration,
+//                                 loss.clone().into_scalar(),
+//                             );
+//                             stdout().flush().unwrap();
+//                         }
+//                     }
+//                 }
+//             }
+//         });
+//     }
 
-    let mut models = vec![None; devices.len()];
-    for epoch in 0..usize::MAX {
-        let (gpu, gpu_model) = rx.recv().unwrap();
-        models[gpu] = Some(gpu_model.to_device(&control_dev));
+//     let mut models = vec![None; devices.len()];
+//     for epoch in 0..usize::MAX {
+//         let (gpu, gpu_model) = rx.recv().unwrap();
+//         models[gpu] = Some(gpu_model.to_device(&control_dev));
 
-        let mut mean_model: Model<B> = config.model.init(&control_dev);
-        mean_model.deep = mean_conv2d_from_parts(
-            mean_model.deep,
-            models
-                .iter()
-                .map(|m| m.as_ref().unwrap().deep.clone())
-                .collect(),
-            &control_dev,
-        );
-        // mean_model.deeper = mean_conv2d_from_parts(
-        //     mean_model.deeper,
-        //     models
-        //         .iter()
-        //         .map(|m| m.as_ref().unwrap().deeper.clone())
-        //         .collect(),
-        //     &control_dev,
-        // );
-        // mean_model.deepest = mean_conv2d_from_parts(
-        //     mean_model.deepest,
-        //     models
-        //         .iter()
-        //         .map(|m| m.as_ref().unwrap().deepest.clone())
-        //         .collect(),
-        //     &control_dev,
-        // );
-    }
-}
+//         let mut mean_model: Model<B> = config.model.init(&control_dev);
+//         mean_model.deep = mean_conv2d_from_parts(
+//             mean_model.deep,
+//             models
+//                 .iter()
+//                 .map(|m| m.as_ref().unwrap().deep.clone())
+//                 .collect(),
+//             &control_dev,
+//         );
+//         // mean_model.deeper = mean_conv2d_from_parts(
+//         //     mean_model.deeper,
+//         //     models
+//         //         .iter()
+//         //         .map(|m| m.as_ref().unwrap().deeper.clone())
+//         //         .collect(),
+//         //     &control_dev,
+//         // );
+//         // mean_model.deepest = mean_conv2d_from_parts(
+//         //     mean_model.deepest,
+//         //     models
+//         //         .iter()
+//         //         .map(|m| m.as_ref().unwrap().deepest.clone())
+//         //         .collect(),
+//         //     &control_dev,
+//         // );
+//     }
+// }
 
 fn main() -> Result<(), walkdir::Error> {
     let cli = Cli::parse();
@@ -1132,6 +1106,8 @@ fn main() -> Result<(), walkdir::Error> {
                 output_dir,
                 *factor,
                 *samples_per_img,
+                *epochs,
+                *lr,
             );
         }
     }
