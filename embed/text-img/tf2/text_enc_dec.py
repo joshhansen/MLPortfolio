@@ -177,17 +177,17 @@ class Decoder(tf.keras.layers.Layer):
   return x
 
 class EncDec(tf.keras.Model):
- def __init__(self, *, num_heads: int, emb:int, input_vocab_size: int, output_vocab_size: int):
+ def __init__(self, *, num_heads: int, emb:int, vocab_size: int):
   super().__init__()
   self.enc = Encoder(
    num_heads=num_heads,
-   input_vocab_size=input_vocab_size,
+   input_vocab_size=vocab_size,
    emb=emb,
   )
   self.dec = Decoder(
    num_heads=num_heads,
    emb=emb,
-   output_vocab_size=output_vocab_size,
+   output_vocab_size=vocab_size,
   )
 
  # def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
@@ -197,23 +197,21 @@ class EncDec(tf.keras.Model):
   x_enc = self.enc(x)
   return self.dec(x_enc)
   
+# Returns train, valid, grapheme_count
+def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, int]:
+  # data_path = os.path.join(os.path.expanduser('~'), 'Data')
+  data_path = '/blok/@data'
 
-if __name__=="__main__":
-  home_dir = os.path.expanduser('~')
+  train_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.rand.gz')
+  valid_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.rand.gz')
+  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.rand.gz')
 
   grapheme_idx = load_grapheme_idx()
   print(grapheme_idx)
 
-  # data_path = os.path.join(home_dir, 'Data')
-  data_path = '/blok/@data'
-
-  wptitles_train_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_train.rand.gz')
-  wptitles_valid_path = os.path.join(data_path, 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_valid.rand.gz')
-  # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.rand.gz')
-
   tokenizer = tft.WhitespaceTokenizer()
-  train = wp_titles_dataset(wptitles_train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
-  valid = wp_titles_dataset(wptitles_valid_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
+  train = wp_titles_dataset(train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
+  valid = wp_titles_dataset(valid_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
 
   print(f"First train: {next(iter(train))}")
   print(f"First valid: {next(iter(valid))}")
@@ -226,6 +224,11 @@ if __name__=="__main__":
   valid = valid.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
   # test = test.batch(BATCH)
 
+  return train, valid, len(grapheme_idx)
+
+if __name__=="__main__":
+
+  train, valid, grapheme_count = load_datasets()
 
   # num_layers = 4
   d_model = 128
@@ -233,7 +236,6 @@ if __name__=="__main__":
   num_heads = 8
   # dropout_rate = 0.1
 
-  grapheme_count = len(grapheme_idx)
   print(f"grapheme_count: {grapheme_count}")
 
   train_in = train.map(lambda x,y: x)

@@ -160,8 +160,7 @@ class EncDec(tf.keras.Model):
   x_enc = self.enc(x)
   return self.dec(x_enc)
   
-
-if __name__=="__main__":
+def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset]:
   data_dir = '/blok/@data'
   # data_dir = os.path.join(os.path.expanduser('~'), 'Data')
 
@@ -193,6 +192,11 @@ if __name__=="__main__":
   # train = train.batch(BATCH, drop_remainder=True)
   # valid = valid.ragged_batch(BATCH, drop_remainder=True)
   # test = test.ragged_batch(BATCH, drop_remainder=True)
+
+  return train, valid
+
+if __name__=="__main__":
+  train, valid = load_datasets()
 
   print(f"First train: {next(iter(train))}")
 
