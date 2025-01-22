@@ -26,6 +26,28 @@ EMB=128
 
 #     return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(width,), dtype=tf.float32))
 
+# x: token indices
+#    (batch, seq)
+# y: token indices
+#    (batch, seq)
+#
+# Asserts x.shape == y.shape
+#
+# returns token indices, shape (batch, seq) with the same shape as the inputs
+def text_bin_op(x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+ pass
+
+# x: images
+#    (batch, w, h, c)
+# y: images
+#    (batch, w, h, c)
+#
+# Asserts x.shape == y.shape
+#
+# returns images, shape (batch, w, h, c) with the same shape as the inputs
+def img_bin_op(x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+ pass
+
 class RoundTripBase(tf.keras.layers.Layer):
   def __init__(self, *, img_enc: ImgEncoder, img_dec: ImgDecoder, text_enc: TextEncoder, text_dec: TextDecoder):
     super().__init__()
