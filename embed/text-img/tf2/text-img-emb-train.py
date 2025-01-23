@@ -26,27 +26,137 @@ EMB=128
 
 #     return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(width,), dtype=tf.float32))
 
-# x: token indices
-#    (batch, seq)
-# y: token indices
-#    (batch, seq)
-#
-# Asserts x.shape == y.shape
-#
-# returns token indices, shape (batch, seq) with the same shape as the inputs
-def text_bin_op(x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
- pass
+class Conv(tf.keras.layers.Layer):
+ def __init__(self, *args, **kwargs):
+  self.bn = tf.keras.layers.BatchNormalization()
+  self.relu = tf.keras.layers.ReLU()
+  self.conv = tf.keras.layers.Conv2d(
+   *args,
+   **kwargs,
+  )
 
-# x: images
-#    (batch, w, h, c)
-# y: images
-#    (batch, w, h, c)
+ def call(self, x: tf.Tensor):
+  x = self.bn(x)
+  x = self.conv(x)
+  x = self.relu(x)
+  return x
+
+# A "binary operator" for text sequences that partially follows "Pervasive Attention":
+# https://arxiv.org/pdf/1808.03867
 #
-# Asserts x.shape == y.shape
+# We don't use the DenseNet-style all-preceding-layer inputs
 #
-# returns images, shape (batch, w, h, c) with the same shape as the inputs
-def img_bin_op(x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
- pass
+# We also don't mask "future" output tokens as we are not doing translation; this is meant as a binary operator by which to define a group of texts
+class TextBinOp(tf.keras.layers.Layer):
+ def __init__(self, *, emb: int):
+  self.emb = emb
+
+  # Use large convolutions to somewhat compensate for the lack of DenseNet-style connections
+  # This way we get longer-distance connections with few layers, but higher computational requirements of course
+  self.convs = [
+   Conv(2 * emb, (9, 9), padding='same'),
+   Conv(2 * emb, (9, 9), padding='same'),
+   Conv(2 * emb, (9, 9), padding='same'),
+   Conv(emb, (9, 9), padding='same'),
+   Conv(emb, (9, 9), padding='same'),
+   Conv(emb, (9, 9), padding='same'),
+  ]
+
+ # x: tokens
+ #    (batch, seq, emb)
+ # y: tokens
+ #    (batch, seq, emb)
+ #
+ # Asserts x.shape == y.shape
+ #
+ # returns token indices, shape (batch, seq, emb) with the same shape as the inputs
+ def call(self, x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+  assert(x.shape == y.shape)
+  assert(x.shape[2] == self.emb)
+  assert(y.shape[2] == self.emb)
+
+  # Build the 2d translation matrix
+  # The channels are a concatenation of the source and target embeddings
+  # i.e. join x and y such that m[:, i, j] is a concatenation of the channels of x[:, i] and y[:, j]
+  # (batch, seq, seq, 2*emb)
+  xs = x.get_shape()
+  s = (xs[0], xs[1], xs[1], 2*xs[2])
+
+  m = tf.zeros(s)
+  for i in range(xs[1]):
+   x_c = x[:, i]
+   for j in range(xs[1]):
+    y_c = y[:, j]
+
+    # Concatenate the channels of x and y
+    m[:, i, j] = tf.concat([x_c, y_c], 1)
+
+  # Ignore the construction of the matrix when we backpropagate
+  m = tf.stop_gradient(m)
+
+  # (batch, seq, seq, 2*emb)
+
+  # Apply convolutions
+  # These are naive - no DenseNet
+  for c in self.convs:
+   m = c(m)
+
+  # (batch, seq, seq, emb)
+
+  # Max pool the source seq away
+  m = tf.reduce_max(m, 1)
+  # (batch, seq, emb)
+
+  return m
+
+
+# A "binary operator" for images
+#
+# This is meant to define a "group" of images
+class ImgBinOp(tf.keras.layers.Layer):
+ def __init__(self, *, c: int):
+  self.c = c
+
+  # Use large convolutions to somewhat compensate for the lack of DenseNet-style connections
+  # This way we get longer-distance connections with few layers, but higher computational requirements of course
+
+  # Initial high-dimensionality large filters
+  self.convs = 2 * [
+    Conv(2 * c, (9, 9), padding='same')
+  ]
+
+  # Drop one channel at a time
+  for i in range(c):
+   self.convs.append(
+    Conv(2 * c - i, (9, 9), padding='same')
+   )
+
+  # Trailing still-large low-dimensionality filters
+  self.convs.extend(2 * [
+   Conv(c, (9, 9), padding='same'),
+  ])
+
+ # x: images
+ #    (batch, w, h, c)
+ # y: images
+ #    (batch, w, h, c)
+ #
+ # Asserts x.shape == y.shape
+ #
+ # returns images, shape (batch, w, h, c) with the same shape as the inputs
+ def call(self, x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+  assert(x.get_shape() == y.get_shape())
+  assert(x.get_shape()[-1] == self.c)
+  assert(y.get_shape()[-1] == self.c)
+
+  # Concatenate the inputs across channels
+  z = tf.concat([x, y], 3)
+  # (batch, w, h, 2*c)
+
+  for c in self.convs:
+   z = c(z)
+
+  return z
 
 class RoundTripBase(tf.keras.layers.Layer):
   def __init__(self, *, img_enc: ImgEncoder, img_dec: ImgDecoder, text_enc: TextEncoder, text_dec: TextDecoder):
