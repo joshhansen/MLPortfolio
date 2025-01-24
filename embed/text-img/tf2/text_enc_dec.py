@@ -198,7 +198,7 @@ class EncDec(tf.keras.Model):
   return self.dec(x_enc)
   
 # Returns train, valid, grapheme_count
-def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, int]:
+def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, GraphemeIdx]:
   # data_path = os.path.join(os.path.expanduser('~'), 'Data')
   data_path = '/blok/@data'
 
@@ -207,14 +207,14 @@ def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, int]:
   # wptitles_test_path = os.path.join(home_dir, 'Data', 'org', 'wikimedia', 'enwiki-20241201-all-titles-in-ns0_test.rand.gz')
 
   grapheme_idx = load_grapheme_idx()
-  print(grapheme_idx)
+  # print(grapheme_idx)
 
   tokenizer = tft.WhitespaceTokenizer()
   train = wp_titles_dataset(train_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
   valid = wp_titles_dataset(valid_path, tokenizer, grapheme_idx, MAX_STR_LEN, include_label=True)
 
-  print(f"First train: {next(iter(train))}")
-  print(f"First valid: {next(iter(valid))}")
+  # print(f"First train: {next(iter(train))}")
+  # print(f"First valid: {next(iter(valid))}")
 
   # Make the datum both input and output
   # train = train.map(lambda s: (s, s))
@@ -224,11 +224,45 @@ def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, int]:
   valid = valid.batch(BATCH, drop_remainder=True).map(prepare_batch, tf.data.AUTOTUNE)
   # test = test.batch(BATCH)
 
-  return train, valid, len(grapheme_idx)
+  return train, valid, grapheme_idx
+
+class TextCallback(tf.keras.callbacks.Callback):
+ def __init__(self, output_dir: str, valid: tf.data.Dataset, grapheme_idx: GraphemeIdx):
+  self.output_dir = output_dir
+  self.valid = valid
+  self.grapheme_idx = grapheme_idx
+
+ def on_epoch_end(self, epoch, logs, *args, **kwargs):
+  with open(f"{self.output_dir}/texts-it-{epoch}", 'w') as w:
+   s, _ = next(iter(self.valid))
+
+   original_text = self.grapheme_idx.unindex_txts(s.numpy().tolist())
+
+   result_probs = self.model(s)
+
+   # print(result_probs.get_shape())
+
+   result = tf.argmax(result_probs, axis=2)
+
+   # print(result.get_shape())
+
+   l = result.numpy().tolist()
+
+   # print(l)
+
+   text = self.grapheme_idx.unindex_txts(l)
+
+   for i, t in enumerate(text):
+    w.write(original_text[i])
+    w.write('\t')
+    w.write(t)
+    w.write('\n')
+
+  
 
 if __name__=="__main__":
 
-  train, valid, grapheme_count = load_datasets()
+  train, valid, grapheme_idx = load_datasets()
 
   # num_layers = 4
   d_model = 128
@@ -236,7 +270,8 @@ if __name__=="__main__":
   num_heads = 8
   # dropout_rate = 0.1
 
-  print(f"grapheme_count: {grapheme_count}")
+  grapheme_count = len(grapheme_idx)
+  # print(f"grapheme_count: {grapheme_count}")
 
   train_in = train.map(lambda x,y: x)
   train_out = train.map(lambda x,y: y)
@@ -266,8 +301,7 @@ if __name__=="__main__":
   m = EncDec(
    num_heads=num_heads,
    emb=d_model,
-   input_vocab_size=grapheme_count,
-   output_vocab_size=grapheme_count,
+   vocab_size=grapheme_count,
   )
 
   x = next(iter(train_in))
@@ -286,15 +320,15 @@ if __name__=="__main__":
   x_dec = m(x)
 
 
-  print(x_dec)
+  # print(x_dec)
 
   # y = next(iter(train_out))
 
   # y_emb = pos(y)
 
   # print(y_emb)
-  optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
-                                     epsilon=1e-9)
+  # optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
+  #                                    epsilon=1e-9)
   loss = tf.keras.losses.SparseCategoricalCrossentropy(
     # from_logits=True,
     # reduction='none'
@@ -302,8 +336,33 @@ if __name__=="__main__":
 
   m.compile(
    loss=loss,
-   optimizer=optimizer,
+   optimizer='adam',
    run_eagerly=True,
   )
 
-  m.fit(train, epochs=20, validation_data=valid)
+  m.fit(train, epochs=100, validation_data=valid, callbacks=[TextCallback('/tmp', valid, grapheme_idx)])
+
+  # with open('/tmp/texts', 'w') as w:
+  #  s, _ = next(iter(valid))
+
+  #  original_text = grapheme_idx.unindex_txts(s.numpy().tolist())
+
+  #  result_probs = m(s)
+
+  #  # print(result_probs.get_shape())
+
+  #  result = tf.argmax(result_probs, axis=2)
+
+  #  # print(result.get_shape())
+
+  #  l = result.numpy().tolist()
+
+  #  # print(l)
+
+  #  text = grapheme_idx.unindex_txts(l)
+
+  #  for i, t in enumerate(text):
+  #   w.write(original_text[i])
+  #   w.write('\t')
+  #   w.write(t)
+  #   w.write('\n')

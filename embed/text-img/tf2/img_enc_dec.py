@@ -6,7 +6,7 @@ from tensorflow.keras.layers import Conv2D
 
 from images import images_dataset
 
-BATCH=10
+BATCH=250
 W=128
 H=128
 
@@ -141,6 +141,8 @@ class Decoder(tf.keras.layers.Layer):
   for conv in self.convs:
    x = conv(x)
 
+  # x = tf.cast(tf.math.round(x), tf.int32)
+
   return x
 
 class EncDec(tf.keras.Model):
@@ -164,34 +166,36 @@ def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset]:
   data_dir = '/blok/@data'
   # data_dir = os.path.join(os.path.expanduser('~'), 'Data')
 
-  train_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's100', 'train', 'small')
-  valid_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's100', 'valid', 'small')
+  train_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's25', 'train', 'small')
+  valid_path = os.path.join(data_dir, 'org', 'wikimedia', 'wikimedia-commons-merged4', 's25', 'valid', 'small')
 
   # train = images_dataset(path, 'train')
   # valid = images_dataset(path, 'valid')
 
-  train = tf.keras.preprocessing.image_dataset_from_directory(
-   train_path,
-   labels=None,
-   batch_size=BATCH,
-   image_size=(W,H),
-  )
-  valid = tf.keras.preprocessing.image_dataset_from_directory(
-   valid_path,
-   labels=None,
-   batch_size=BATCH,
-   image_size=(W,H),
-  )
+  # train = tf.keras.preprocessing.image_dataset_from_directory(
+  #  train_path,
+  #  labels=None,
+  #  batch_size=BATCH,
+  #  image_size=(W,H),
+  #  follow_links=True,
+  # )
+  # valid = tf.keras.preprocessing.image_dataset_from_directory(
+  #  valid_path,
+  #  labels=None,
+  #  batch_size=BATCH,
+  #  image_size=(W,H),
+  #  follow_links=True,
+  # )
 
-  # print(f"First valid: {next(iter(valid))}")
+  train = images_dataset(train_path, 'train', W, H)
+  valid = images_dataset(valid_path, 'valid', W, H)
 
   # Make the datum both input and output
   train = train.map(lambda s: (s, s))
   valid = valid.map(lambda s: (s, s))
 
-  # train = train.batch(BATCH, drop_remainder=True)
-  # valid = valid.ragged_batch(BATCH, drop_remainder=True)
-  # test = test.ragged_batch(BATCH, drop_remainder=True)
+  train = train.batch(BATCH, drop_remainder=True)
+  valid = valid.batch(BATCH, drop_remainder=True)
 
   return train, valid
 
@@ -236,15 +240,15 @@ if __name__=="__main__":
   # y_emb = pos(y)
 
   # print(y_emb)
-  optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
-                                     epsilon=1e-9)
+  # optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
+  #                                    epsilon=1e-9)
   # loss = tf.keras.losses.SparseCategoricalCrossentropy(
     # from_logits=True,
     # reduction='none'
   # )
 
   m.compile(
-   loss='categorical_crossentropy',
+   loss='mse',
    optimizer='adam',
    run_eagerly=True,
   )
