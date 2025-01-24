@@ -127,10 +127,9 @@ def train_step(real_images):
     g_optimizer.apply_gradients(zip(grads, generator.trainable_weights))
     return d_loss, g_loss, generated_images
 
-def train():
+def train(epochs: int):
   import time
 
-  epochs = 2
   for epoch in range(epochs):
       print("\nStart of epoch %d" % (epoch,))
       start_time = time.time()
