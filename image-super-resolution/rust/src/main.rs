@@ -225,6 +225,11 @@ impl<B: Backend> ImageSRBatcher<B> {
             return Ok(None);
         }
 
+        println!("small path: {}", small_img_path.display());
+        println!("large path: {}", large_img_path.display());
+        println!("small {} x {}", small_w, small_h);
+        println!("large {} x {}", large_w, large_h);
+
         let mut small_imgs: Vec<Tensor<B, 3>> = Vec::with_capacity(samples);
         let mut large_imgs: Vec<Tensor<B, 3>> = Vec::with_capacity(samples);
 
@@ -233,7 +238,7 @@ impl<B: Backend> ImageSRBatcher<B> {
 
         let mut rng = rand::thread_rng();
 
-        for _ in 0..samples {
+        for sample in 0..samples {
             let small_x = rng.gen_range(0..small_max_x) as u32;
             let small_y = rng.gen_range(0..small_max_y) as u32;
 
@@ -262,8 +267,29 @@ impl<B: Backend> ImageSRBatcher<B> {
 
             let small_img = DynamicImage::ImageRgba8(small_img);
 
+            debug_assert!(small_img.width() > 0);
+            debug_assert!(small_img.height() > 0);
+            debug_assert!(large_img.width() > 0);
+            debug_assert!(large_img.height() > 0);
+
+            println!(
+                "small {} {} x {}",
+                sample,
+                small_img.width(),
+                small_img.height()
+            );
+            println!(
+                "large {} {} x {}",
+                sample,
+                large_img.width(),
+                large_img.height()
+            );
+
             let small_img = Self::img_to_tensor(small_img, true, dev); //FIXME
+
+            println!("small to tensor done");
             let large_img = Self::img_to_tensor(large_img, false, dev); //FIXME
+            println!("large to tensor done");
 
             small_imgs.push(small_img);
             large_imgs.push(large_img);
@@ -279,7 +305,7 @@ impl<B: Backend> ImageSRBatcher<B> {
         let bytes = img.into_rgb32f().into_vec();
 
         let flat_tensor: Tensor<B, 1> = Tensor::from_floats(&bytes[..], dev);
-        println!("Flat tensor shape: {:?}", flat_tensor.shape());
+        // println!("Flat tensor shape: {:?}", flat_tensor.shape());
 
         // We know this because of the into_rgb32f() call which forces it to RGB
         let c = 3usize;
