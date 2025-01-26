@@ -112,71 +112,37 @@ class Encoder(tf.keras.layers.Layer):
 
   return x
 
-class Dec(tf.keras.layers.Layer):
- def __init__(self, *, num_heads: int, emb: int):
-  super().__init__()
-  self.mha = tf.keras.layers.MultiHeadAttention(
-   num_heads=num_heads,
-   key_dim=emb,
-  )
-  self.layernorm = tf.keras.layers.LayerNormalization()
-  self.add = tf.keras.layers.Add()
-
-
- def call(self, x: tf.Tensor):
-  attn = self.mha(
-   query=x,
-   value=x,
-   key=x,
-  )
-  x = self.add([x, attn])
-  x = self.layernorm(x)
-
-  return x
-  
- 
-
 class Decoder(tf.keras.layers.Layer):
  def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
   super().__init__()
   self.pos_encoding = positional_encoding(length=2048, depth=emb)
-  self.dec = Dec(num_heads=num_heads, emb=emb)
+  self.dec = MhaResLayerNorm(num_heads=num_heads, emb=emb)
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
 
  def call(self, x: tf.Tensor):
   # (batch, emb)
-  # print(f"Dec x shape: {x.get_shape()}")
 
-  #TODO Does manually broadcasting make sense? Is it needed?
-  # x = tf.repeat(x, MAX_STR_LEN - 1, 1)
-  x = tf.tile(x, [1, MAX_STR_LEN - 1])
-  # (batch, seq*emb)
-  # print(f"Dec x shape2: {x.get_shape()}")
+  # Add a cardinality 1 dimension at index 1
+  s = list(x.get_shape())
+  s.insert(1, 1)
+  x = tf.reshape(x, s)
+  # (batch, 1, emb)
 
-  batch = x.get_shape()[0]
-
-  #TODO Check if this makes sense!
-  x = tf.reshape(x, (batch, MAX_STR_LEN - 1, self.emb_size))
+  # Now repeat along the newly added dimension, one repetition per output seq location
+  # MAX_STR_LEN-1 because we drop start/end tokens
+  x = tf.repeat(x, MAX_STR_LEN-1, axis=1)
   # (batch, seq, emb)
-  # print(f"Dec x shape2': {x.get_shape()}")
-  # print(x)
 
   # Augment with a position encoding
-  length = x.get_shape()[1]
-  x = x + self.pos_encoding[tf.newaxis, :length, :]
+  x = x + self.pos_encoding[tf.newaxis, :(MAX_STR_LEN-1), :]
+  # (batch, seq, emb)
 
   x = self.dec(x)
+  # (batch, seq, emb)
 
   x = self.emb_to_vocab(x)
-
-  # (batch, seq, vocab)
-  # print(f"Dec x shape4: {x.get_shape()}")
-
-  # x = tf.math.argmax(x, 2)
-
-  # (batch, seq) ???
-  # print(f"Dec x shape5: {x.get_shape()}")
+  # (batch, seq, grapheme)
 
   return x
 
@@ -197,7 +163,6 @@ class EncDec(tf.keras.Model):
  # def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
   # x, y = inputs
  def call(self, x: tf.Tensor):
-
   x_enc = self.enc(x)
   return self.dec(x_enc)
   
