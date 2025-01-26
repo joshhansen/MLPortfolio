@@ -52,8 +52,7 @@ def prepare_batch(x: tf.Tensor, y: tf.Tensor):
 
     return x, y
 
-# Encodes a sequence as an emb-length vector with no other context
-class Enc(tf.keras.layers.Layer):
+class MhaResLayerNorm(tf.keras.layers.Layer):
  def __init__(self, *, num_heads: int, emb: int):
   super().__init__()
   self.mha = tf.keras.layers.MultiHeadAttention(
@@ -64,7 +63,6 @@ class Enc(tf.keras.layers.Layer):
   self.add = tf.keras.layers.Add()
 
  def call(self, x: tf.Tensor):
-  # print(f"Enc x shape: {x.get_shape()}")
   # (batch, seq, emb)
   attn = self.mha(
    query=x,
@@ -72,17 +70,23 @@ class Enc(tf.keras.layers.Layer):
    key=x
   )
   # (batch, seq, emb)
+
   x = self.add([x, attn])
-  # print(f"Enc x shape2: {x.get_shape()}")
+  # (batch, seq, emb)
+
+  x = self.layernorm(x)
+  # (batch, seq, emb)
+
+  return x
+
+class EncodingSummer(tf.keras.layers.Layer):
+ def call(self, x: tf.Tensor):
   # (batch, seq, emb)
   x = tf.reduce_sum(x, 1)
   # (batch, emb)
-  # print(f"Enc x shape3: {x.get_shape()}")
-  x = self.layernorm(x)
-  # (batch, emb)
-  # print(f"Enc x shape4: {x.get_shape()}")
   return x
 
+# Encodes a sequence as an emb-length vector with no other context
 class Encoder(tf.keras.layers.Layer):
  def __init__(self, *, num_heads: int, input_vocab_size: int, emb: int):
   super().__init__()
@@ -90,10 +94,10 @@ class Encoder(tf.keras.layers.Layer):
    vocab_size=input_vocab_size,
    emb=emb,
   )
-  self.enc = Enc(
-   num_heads=num_heads,
-   emb=emb
-  )
+  self.enc = tf.keras.Sequential([
+   MhaResLayerNorm(num_heads=num_heads, emb=emb),
+   EncodingSummer(),
+  ])
 
  def call(self, x: tf.Tensor):
   # (batch, seq)
