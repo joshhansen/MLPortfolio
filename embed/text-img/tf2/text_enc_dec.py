@@ -119,6 +119,7 @@ class Decoder(tf.keras.layers.Layer):
   self.dec = MhaResLayerNorm(num_heads=num_heads, emb=emb)
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
+  self.softmax = tf.keras.layers.Softmax()
 
  def call(self, x: tf.Tensor):
   # (batch, emb)
@@ -142,6 +143,9 @@ class Decoder(tf.keras.layers.Layer):
   # (batch, seq, emb)
 
   x = self.emb_to_vocab(x)
+  # (batch, seq, grapheme)
+
+  x = self.softmax(x)
   # (batch, seq, grapheme)
 
   return x
