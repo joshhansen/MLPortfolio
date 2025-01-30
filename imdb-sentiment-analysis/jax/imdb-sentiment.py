@@ -216,6 +216,9 @@ def accuracy(preds, y):
 
 def model(params: Params, x: jnp.ndarray):
  # print(f"x shape {x.shape}")
+
+ #TODO residual
+ #TODO norm
  
  # out = emb[x].mean(axis=1)
  out = params.emb[x]
@@ -226,9 +229,13 @@ def model(params: Params, x: jnp.ndarray):
 
  # print(f"post-attn shape: {out.shape}")
 
+ #FIXME? What's this mean about?
  out = jnp.mean(out, axis=-2)
 
  # print(f"post-attn-mean-shape: {out.shape}")
+
+ #TODO ff block separate from reduction to binary
+ #TODO include residual and norm
 
  with jax.numpy_rank_promotion("warn"):
   out = params.linear1(out)
@@ -266,7 +273,7 @@ def log2_safe(x):
  log2 = jnp.log2(x)
  return jnp.nan_to_num(log2, neginf=0.0) 
 
-def binary_cross_entropy(preds, y):
+def binary_cross_entropy(preds: jnp.ndarray, y: jnp.ndarray):
  h = y * log2_safe(preds) + (1.0 - y) * log2_safe(1.0 - preds)
 
  return -h.mean()
@@ -285,8 +292,8 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  # checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
  # delta = preds - y
  # return jnp.mean(delta**2, dtype=fX)
- # return binary_cross_entropy(preds, y)
- return mean_squared_error(preds, y)
+ return binary_cross_entropy(preds, y)
+ # return mean_squared_error(preds, y)
 
 def fit(
  params,
@@ -391,7 +398,8 @@ if __name__ == "__main__":
  del total_size
  del shapes
 
- optimizer = optax.adam(learning_rate=1e-3)
+ # optimizer = optax.adam(learning_rate=1e-3)
+ optimizer = optax.sgd(learning_rate=1e-3)
 
  start = time.time()
 
