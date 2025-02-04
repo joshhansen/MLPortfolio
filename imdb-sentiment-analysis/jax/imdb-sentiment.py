@@ -266,7 +266,7 @@ def log2_safe(x):
  log2 = jnp.log2(x)
  return jnp.nan_to_num(log2, neginf=0.0) 
 
-def binary_cross_entropy(preds, y):
+def binary_cross_entropy(preds: jnp.ndarray, y: jnp.ndarray):
  h = y * log2_safe(preds) + (1.0 - y) * log2_safe(1.0 - preds)
 
  return -h.mean()
@@ -285,8 +285,8 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  # checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
  # delta = preds - y
  # return jnp.mean(delta**2, dtype=fX)
- # return binary_cross_entropy(preds, y)
- return mean_squared_error(preds, y)
+ return binary_cross_entropy(preds, y)
+ # return mean_squared_error(preds, y)
 
 def fit(
  params,
