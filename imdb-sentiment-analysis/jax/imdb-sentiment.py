@@ -13,7 +13,7 @@ import time
 
 from jax import config
 config.update("jax_debug_nans", True)
-config.update("jax_numpy_rank_promotion", "raise")
+config.update("jax_numpy_rank_promotion", "warn")
 
 import jax
 from jax import debug as jdbg
@@ -77,6 +77,10 @@ def scaled_dot_product_attention(q: jnp.ndarray, k: jnp.ndarray, v: jnp.ndarray)
 
  return out @ v
 
+
+
+
+ 
 @dataclass
 class AttentionParams:
  w_query: jnp.ndarray
@@ -160,21 +164,23 @@ class Params:
  attn_query: jnp.ndarray
  linear1: Linear
  linear2: Linear
+ bn_restore: Linear 
 
  @classmethod
- def initialize(cls, key, vocab_len):
-  emb_key, attn_key, attn_query_key, linear1_key, linear2_key = jrand.split(key, 5)
+ def initialize(cls, key, vocab_len: int):
+  emb_key, attn_key, attn_query_key, linear1_key, linear2_key, bn_restore_key = jrand.split(key, 6)
   emb =  initializer(emb_key, (vocab_len, EMBEDDING_DIMS), dtype=fX)
   attn =  MultiheadAttentionParams.initialize(attn_key, initializer, ATTN_HEADS, EMBEDDING_DIMS, ATTN_DIMS_PER_HEAD, EMBEDDING_DIMS)
   attn_query = initializer(attn_query_key, (target_len, EMBEDDING_DIMS), dtype=fX)
   linear1 =  Linear.initialize(linear1_key, MODEL_DIMS, MODEL_DIMS // 2, fX)
   linear2 =  Linear.initialize(linear2_key, MODEL_DIMS // 2, 1, fX)
+  bn_restore = Linear.initialize(bn_restore_key, MODEL_DIMS, MODEL_DIMS, fX)
 
-  return cls(emb, attn, attn_query, linear1, linear2)
+  return cls(emb, attn, attn_query, linear1, linear2, bn_restore)
 
 
 def flatten_Params(params: Params) -> Tuple[list[jnp.ndarray], None]:
- return ([params.emb, params.attn, params.attn_query, params.linear1, params.linear2], None)
+ return ([params.emb, params.attn, params.attn_query, params.linear1, params.linear2, params.bn_restore], None)
 
 def unflatten_Params(aux_data: str, flat_contents: list[jnp.ndarray]) -> Params:
  return Params(*flat_contents)
@@ -207,6 +213,39 @@ def multihead_attention(params: MultiheadAttentionParams, q: jnp.ndarray, k: jnp
 
 batch_multihead_attention = jax.vmap(multihead_attention, [None, None, 0, 0])
 
+# Helps avoid divisions by zero
+ETA=0.001
+
+
+# After "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"
+# https://arxiv.org/pdf/1502.03167
+#
+# params: the transform that restores "representational power"
+#         gamma and beta in https://arxiv.org/pdf/1502.03167
+#       d_model -> d_model
+#
+# x: (batch, seq, d_model)
+def batch_norm(params: Linear, x: jnp.ndarray) -> jnp.ndarray:
+ print(f"batch_norm: {x.shape}")
+ batch = x.shape[0]
+ # ()
+
+ mean = jnp.mean(x, axis=0)
+ # (seq, d_model)
+
+ var = (x - mean)**2 / batch
+ # (batch, seq, d_model)
+
+ # Allow the broadcast matching x with mean
+ with jax.numpy_rank_promotion("allow"):
+  x_normed = (x - mean) / jnp.sqrt(var + ETA)
+ # (batch, seq, d_model)
+ 
+ y = params(x_normed)
+ # (batch, seq, d_model)
+
+ return y
+
 def accuracy(preds, y):
  matching = y == preds
 
@@ -217,15 +256,19 @@ def accuracy(preds, y):
 def model(params: Params, x: jnp.ndarray):
  # print(f"x shape {x.shape}")
 
- #TODO residual
- #TODO norm
- 
  # out = emb[x].mean(axis=1)
  out = params.emb[x]
+
+ residual = out
 
  # print(f"embedded shape {out.shape}")
 
  out = batch_multihead_attention(params.attn, params.attn_query, out, out)
+
+ out += residual
+
+ out = batch_norm(params.bn_restore, out)
+ 
 
  # print(f"post-attn shape: {out.shape}")
 
