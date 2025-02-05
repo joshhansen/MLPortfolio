@@ -226,7 +226,6 @@ ETA=0.001
 #
 # x: (batch, seq, d_model)
 def batch_norm(params: Linear, x: jnp.ndarray) -> jnp.ndarray:
- print(f"batch_norm: {x.shape}")
  batch = x.shape[0]
  # ()
 
@@ -265,9 +264,9 @@ def model(params: Params, x: jnp.ndarray):
 
  out = batch_multihead_attention(params.attn, params.attn_query, out, out)
 
- out += residual
+ # out += residual
 
- out = batch_norm(params.bn_restore, out)
+ # out = batch_norm(params.bn_restore, out)
  
 
  # print(f"post-attn shape: {out.shape}")
@@ -335,8 +334,8 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  # checkify.check(preds.shape == y.shape, "predictions and labels had different shapes")
  # delta = preds - y
  # return jnp.mean(delta**2, dtype=fX)
- return binary_cross_entropy(preds, y)
- # return mean_squared_error(preds, y)
+ # return binary_cross_entropy(preds, y)
+ return mean_squared_error(preds, y)
 
 def fit(
  params,
@@ -441,8 +440,8 @@ if __name__ == "__main__":
  del total_size
  del shapes
 
- # optimizer = optax.adam(learning_rate=1e-3)
- optimizer = optax.sgd(learning_rate=1e-3)
+ optimizer = optax.adam(learning_rate=1e-3)
+ # optimizer = optax.sgd(learning_rate=1e-3)
 
  start = time.time()
 
