@@ -255,6 +255,7 @@ def accuracy(preds, y):
 
  return correct / x_test.shape[0]
 
+@jax.jit
 def model(params: Params, x: jnp.ndarray):
  # print(f"x shape {x.shape}")
 
