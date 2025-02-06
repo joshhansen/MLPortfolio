@@ -266,16 +266,21 @@ def model(params: Params, x: jnp.ndarray):
  # print(f"embedded shape {out.shape}")
 
  out = batch_multihead_attention(params.attn, params.attn_query, out, out)
-
- out += residual
-
- out = batch_norm(params.bn_restore, out)
- 
+ # (batch, seq, d_model)
 
  # print(f"post-attn shape: {out.shape}")
 
- #FIXME? What's this mean about?
+ out += residual
+ # (batch, seq, d_model)
+ # print(f"post-residual shape: {out.shape}")
+
+ # out = batch_norm(params.bn_restore, out)
+ # (batch, seq, d_model) 
+ # print(f"post-batch-norm shape: {out.shape}")
+
+ # Average across the sequence
  out = jnp.mean(out, axis=-2)
+ # (batch, d_model)
 
  # print(f"post-attn-mean-shape: {out.shape}")
 
@@ -284,18 +289,19 @@ def model(params: Params, x: jnp.ndarray):
 
  with jax.numpy_rank_promotion("warn"):
   out = params.linear1(out)
+  # (batch, d_model // 2)
 
   # print(f"post-linear1 shape: {out.shape}")
 
   out = params.linear2(out)
+  # (batch, 1)
 
   # print(f"post-linear2 shape: {out.shape}")
 
- out = out.mean(axis=-1)
+ out = jnp.squeeze(out, axis=-1)
+ # (batch,)
 
- # print(f"post-dense-mean shape: {out.shape}")
-
- # print(f"post-mean shape: {out.shape}")
+ # print(f"post-dense-squeeze shape: {out.shape}")
 
  return jnn.sigmoid(out)
  # return out.sum(axis=1)
