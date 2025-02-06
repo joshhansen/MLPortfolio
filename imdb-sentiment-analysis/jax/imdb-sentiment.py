@@ -33,10 +33,12 @@ BATCH_SIZE = 1000
 EMBEDDING_DIMS = 20
 MODEL_DIMS = EMBEDDING_DIMS
 ATTN_QUERIES = 8
-ATTN_DIMS = 80
+# ATTN_DIMS = 80
 ATTN_HEADS = 5
-ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
-ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
+# ATTN_DIMS_PER_HEAD = ATTN_DIMS // ATTN_HEADS
+ATTN_DIMS_PER_HEAD = MODEL_DIMS
+ATTN_DIMS = ATTN_HEADS * ATTN_DIMS_PER_HEAD
+# ATTN_SCALE = 1.0 / jnp.sqrt(ATTN_DIMS)
 fX = jnp.float32
 iX = jnp.uint32
 
@@ -252,6 +254,7 @@ def accuracy(preds, y):
 
  return correct / x_test.shape[0]
 
+@jax.jit
 def model(params: Params, x: jnp.ndarray):
  # print(f"x shape {x.shape}")
 
@@ -263,16 +266,20 @@ def model(params: Params, x: jnp.ndarray):
  # print(f"embedded shape {out.shape}")
 
  out = batch_multihead_attention(params.attn, params.attn_query, out, out)
-
- # out += residual
-
- # out = batch_norm(params.bn_restore, out)
- 
-
+ # (batch, seq, d_model)
  # print(f"post-attn shape: {out.shape}")
 
- #FIXME? What's this mean about?
+ out += residual
+ # (batch, seq, d_model)
+ # print(f"post-residual shape: {out.shape}")
+
+ # out = batch_norm(params.bn_restore, out)
+ # (batch, seq, d_model) 
+ # print(f"post-batch-norm shape: {out.shape}")
+
+ # Average across the sequence
  out = jnp.mean(out, axis=-2)
+ # (batch, d_model)
 
  # print(f"post-attn-mean-shape: {out.shape}")
 
@@ -281,18 +288,16 @@ def model(params: Params, x: jnp.ndarray):
 
  with jax.numpy_rank_promotion("warn"):
   out = params.linear1(out)
-
+  # (batch, d_model // 2)
   # print(f"post-linear1 shape: {out.shape}")
 
   out = params.linear2(out)
-
+  # (batch, 1)
   # print(f"post-linear2 shape: {out.shape}")
 
- out = out.mean(axis=-1)
-
- # print(f"post-dense-mean shape: {out.shape}")
-
- # print(f"post-mean shape: {out.shape}")
+ out = jnp.squeeze(out, axis=-1)
+ # (batch,)
+ # print(f"post-dense-squeeze shape: {out.shape}")
 
  return jnn.sigmoid(out)
  # return out.sum(axis=1)
@@ -325,7 +330,7 @@ def mean_squared_error(preds, y):
  return jnp.mean(delta**2, dtype=fX)
 
 @jax.jit
-def loss(params, x: jnp.ndarray, y: jnp.ndarray):
+def loss(params: Params, x: jnp.ndarray, y: jnp.ndarray):
  preds = model(params, x)
  # jdbg.breakpoint()
  # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
@@ -338,7 +343,7 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  return mean_squared_error(preds, y)
 
 def fit(
- params,
+ params: Params,
  optimizer: optax.GradientTransformation,
  x_train: jnp.ndarray,
  y_train: jnp.ndarray,
