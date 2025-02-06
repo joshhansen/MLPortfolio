@@ -326,7 +326,7 @@ def mean_squared_error(preds, y):
  return jnp.mean(delta**2, dtype=fX)
 
 @jax.jit
-def loss(params, x: jnp.ndarray, y: jnp.ndarray):
+def loss(params: Params, x: jnp.ndarray, y: jnp.ndarray):
  preds = model(params, x)
  # jdbg.breakpoint()
  # jdbg.print(f"preds.shape {preds.shape} y.shape {y.shape}")
@@ -339,7 +339,7 @@ def loss(params, x: jnp.ndarray, y: jnp.ndarray):
  # return mean_squared_error(preds, y)
 
 def fit(
- params,
+ params: Params,
  optimizer: optax.GradientTransformation,
  x_train: jnp.ndarray,
  y_train: jnp.ndarray,
