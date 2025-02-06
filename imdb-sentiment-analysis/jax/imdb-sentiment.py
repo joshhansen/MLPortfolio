@@ -450,8 +450,8 @@ if __name__ == "__main__":
  del total_size
  del shapes
 
- # optimizer = optax.adam(learning_rate=1e-3)
- optimizer = optax.sgd(learning_rate=1e-3)
+ optimizer = optax.adam(learning_rate=1e-3)
+ # optimizer = optax.sgd(learning_rate=1e-3)
 
  start = time.time()
 
