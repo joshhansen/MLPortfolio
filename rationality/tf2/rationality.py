@@ -363,7 +363,8 @@ def bayes_train_step(*,
   k_y, _j_y = enc(y)
 
   # How badly do the probability distributions respect Bayes' rule?
-  loss = ( h(k_x, k_y) - h(k_y, k_x) * f(k_x) / f(k_y) )**2 
+  loss = ( h(k_x, k_y) - h(k_y, k_x) * f(k_x) / f(k_y) )**2
+  loss = tf.reduce_mean(loss)
  
  if train:
   enc_grads = tape.gradient(loss, enc.trainable_weights)
@@ -405,9 +406,6 @@ def train(*,
   for s in range(steps_per_epoch):
    a,b = next(train_pairs)
 
-   print(a.shape)
-   print(b.shape)
-   
    # autoencoder roundtrips
    for x in (a,b):
     losses['enc_dec'].append(enc_dec_train_step(
@@ -434,7 +432,7 @@ def train(*,
    for k in loss_keys:
     l = fmean(losses[k])
     
-    print(f"{k}: {l}")
+    print(f"{s} {k}: {l}")
 
   valid_losses = defaultdict(list)
 
@@ -469,7 +467,7 @@ def train(*,
    for k in valid_loss_keys:
     l = fmean(valid_losses[k])
     
-    print(f"valid {k}: {l}")
+    print(f"valid {s} {k}: {l}")
 
 word_rgx = re.compile("[A-Za-z0-9'-]+")
 if __name__ == "__main__":
@@ -483,16 +481,24 @@ if __name__ == "__main__":
  BATCH=10
 
  vocab = Index()
- sentence_vecs: list[list[int]] = list()
+ sentence_vecs = list()
  # word_tokenizer = tft.UnicodeScriptTokenizer()
 
- for _ in sentences_dataset(poe_path, vocab, MAX_SEQ_LEN):
+ for s in sentences_dataset(poe_path, vocab, MAX_SEQ_LEN):
+  sentence_vecs.append(s)
   pass# Do this to full populate the vocabulary
 
+ print(f"Total sentences: {len(sentence_vecs)}")
+
  def dataset(filter):
-  return sentences_dataset(poe_path, vocab, MAX_SEQ_LEN)\
+  # sentences = list(sentence_vecs)
+  # shuffle(sentences)
+
+  data = tf.data.Dataset.from_tensor_slices(sentence_vecs)
+
+  return data\
    .repeat()\
-   .shuffle(1000)\
+   .shuffle(len(sentence_vecs), reshuffle_each_iteration=True)\
    .enumerate()\
    .filter(filter)\
    .map(lambda i, x: x)\
