@@ -22,19 +22,33 @@ def sentences(path: str) -> Generator[str, None, None]:
  return nltk.tokenize.sent_tokenize(text)
  
 class Index:
- def __init__(self):
+ def __init__(self, *, unk: str = '<unk>', max_len: int):
   self._next = 0
   self._idx = dict()
   self._unidx = dict()
+  self._unk = unk
+  self._max_len = max_len
+  self._unk_idx = self.idx(unk)
 
  def idx(self, s: str) -> int:
   try:
-   return self._idx[s]
+   idx = self._idx[s]
+   self._freqs[s] += 1
+   return idx
   except:
-   n = self._next
+   n = len(self)
+   if n >= self._max_len:
+    return self._unk_idx
+
    self._idx[s] = n
-   self._next += 1
+   self._unidx[n] = s
    return n
+
+ def unidx(self, idx: int) -> str:
+  try:
+   return self._unidx[idx]
+  except:
+   return self._unk
 
  def idx_tokens(self, tokens: list[str]) -> list[int]:
   indices: list[int] = list()
@@ -45,11 +59,19 @@ class Index:
 
   return indices
 
- def unidx(self, i: int) -> str:
-  return self._unidx[i]
+ def unidx_tokens(self, token_indices: list[int]) -> list[str]:
+  tokens: list[str] = list()
+
+  for i in token_indices:
+   t = self.unidx(i)
+   tokens.append(t)
+
+  return tokens
 
  def __len__(self) -> int:
-  return self._next
+  return len(self._idx)
+
+
   
    
 def tokenize_words(s: str, max_len: int, pad='<pad>') -> list[str]:
@@ -69,7 +91,7 @@ def tokenize_words(s: str, max_len: int, pad='<pad>') -> list[str]:
 
 def _gen_sentences_dataset(path: str, vocab: Index, seq_len: int):
  print(f"Sentences initializing for {path}")
- for s in sentences(poe_path):
+ for s in sentences(path):
   s = s.lower()
 
   tokens = tokenize_words(s, MAX_SEQ_LEN)
@@ -376,6 +398,9 @@ def bayes_train_step(*,
 
  return loss.numpy()
 
+def numpy_to_python(t: list[np.int64]) -> list[int]:
+ return [x.item() for x in t]
+
 def train(*,
  enc_opt: tf.keras.optimizers.Optimizer,
  dec_opt: tf.keras.optimizers.Optimizer,
@@ -390,6 +415,10 @@ def train(*,
  h: ConditionalDist,
  train: tf.data.Dataset,# infinitely looped, shuffled
  valid: tf.data.Dataset,# infinitely looped, shuffled
+ emb:int,
+ non_knowledge_dim: int,
+ vocab: Index,
+ seq_len: int,
 ):
  train_iter = iter(train)
  valid_iter = iter(valid)
@@ -432,8 +461,9 @@ def train(*,
    for k in loss_keys:
     l = fmean(losses[k])
     
-    print(f"{s} {k}: {l}")
+    print(f"\t{e} {s} {k}: {l}")
 
+  print(f"Epoch {e}/{epochs} validation")
   valid_losses = defaultdict(list)
 
   for s in range(valid_steps_per_epoch):
@@ -467,24 +497,60 @@ def train(*,
    for k in valid_loss_keys:
     l = fmean(valid_losses[k])
     
-    print(f"valid {s} {k}: {l}")
+    print(f"\tvalid {e} {s} {k}: {l}")
 
-word_rgx = re.compile("[A-Za-z0-9'-]+")
+
+   # Sample propositions / knowledge and show relevant marginal and conditional distributions
+
+  samples = 10
+  sampled_j = tf.random.uniform((samples, seq_len, emb))
+  non_knowledge_j = tf.zeros((samples, non_knowledge_dim))
+  text_j = dec(k=sampled_j, j=non_knowledge_j)# Yes, this is confusing
+  text_j = tf.argmax(text_j, axis=-1)
+  sampled_p_j = f(sampled_j)
+  # print(sampled_p_j.shape)
+
+  # print(text_j.shape)
+  text_j_ints = text_j.numpy().tolist()
+  text_j_s = [' '.join(vocab.unidx_tokens(x)) for x in text_j_ints]
+  for i, s in enumerate(text_j_s):
+   print(f"{i} {s} {sampled_p_j[i]}")
+  # print(text_j_s)
+  # print(sampled_p_j)
+  
+  # for _ in range(samples):
+  #  sampled_k = tf.random.uniform((samples, sample_seq, emb))
+  #  text_k = dec(k=sampled_k, j=non_knowledge_j)
+  #  sampled_p_k_given_j = g(sampled_k, sampled_j)
+
+    
+
+    
+
+   
+    
+
+word_rgx = re.compile("[A-Za-z0-9']+")
 if __name__ == "__main__":
- home_dir = os.environ['HOME']
- data_dir = os.path.join(home_dir, 'Data')
+ # home_dir = os.environ['HOME']
+ # data_dir = os.path.join(home_dir, 'Data')
+ data_dir = '/blok/@data'
  guten_dir = os.path.join(data_dir, 'org', 'gutenberg')
-
- poe_path = os.path.join(guten_dir, 'pg10031-poe-no-pg.txt')
+ doc_path = os.path.join(guten_dir, 'pg34901-on-liberty.txt')
+ doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
 
  MAX_SEQ_LEN = 64
- BATCH=10
+ BATCH=600
+ MAX_VOCAB=50000
+ num_heads = 8
+ emb = 32
+ non_knowledge_dim = 4
 
- vocab = Index()
+ vocab = Index(max_len = MAX_VOCAB)
  sentence_vecs = list()
  # word_tokenizer = tft.UnicodeScriptTokenizer()
 
- for s in sentences_dataset(poe_path, vocab, MAX_SEQ_LEN):
+ for s in sentences_dataset(doc_path, vocab, MAX_SEQ_LEN):
   sentence_vecs.append(s)
   pass# Do this to full populate the vocabulary
 
@@ -505,12 +571,9 @@ if __name__ == "__main__":
    .batch(BATCH)
   
  txt_train = dataset(lambda i, x: i % 10 > 1)
- # txt_test = dataset(lambda i, x: i == 0)
- txt_valid = dataset(lambda i, x: i == 1)
+ # txt_test = dataset(lambda i, x: i % 10 == 0)
+ txt_valid = dataset(lambda i, x: i % 10 == 1)
 
- num_heads = 8
- emb = 32
- non_knowledge_dim = 16
 
  enc_opt = Adam()
  dec_opt = Adam()
@@ -547,12 +610,16 @@ if __name__ == "__main__":
   f_opt=f_opt,
   h_opt=h_opt,
   epochs=20,
-  steps_per_epoch=1000,
-  valid_steps_per_epoch=100,
+  steps_per_epoch=250,
+  valid_steps_per_epoch=25,
   enc=enc,
   dec=dec,
   f=f,
   h=h,
   train=txt_train,
   valid=txt_valid,
+  emb=emb,
+  non_knowledge_dim=non_knowledge_dim,
+  vocab=vocab,
+  seq_len=MAX_SEQ_LEN,
  )
