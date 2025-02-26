@@ -71,9 +71,6 @@ class Index:
 
  def __len__(self) -> int:
   return len(self._idx)
-
-
-  
    
 def tokenize_words(s: str, max_len: int, pad='<pad>') -> list[str]:
  words: list[str] = list()
@@ -255,40 +252,6 @@ class Decoder(tf.keras.layers.Layer):
   x = tf.broadcast_to(x, s)
   # (batch, seq, emb+non_knowledge_dim)
 
-  # props = k.shape[1]
-
-  # j = tf.expand_dims(j, 1)
-  # # j: (batch, 1, non_knowledge_dim)
-
-  # s = list(j.shape)
-  # s[1] = props
-  # j = tf.broadcast_to(j, s)
-  # # j: (batch, prop, non_knowledge_dim)
-
-  # x = tf.concat([k, j], -1)
-  # # (batch, prop, emb+non_knowledge_dim)
-
-  # del k
-  # del j
-
-  # x = tf.tile(x, (1, self.seq_len // props, 1))
-  # # (batch, seq, emb+non_knowledge_dim)
-
-  # k = tf.tile(k, (1, self.seq_len // k.shape[1], 1))
-  # # k: (batch, seq, emb)
-  # print(k.shape)
-
-  # j = tf.expand_dims(j, 1)
-  # # j: (batch, 1, non_knowledge_dim)
-
-  # s = list(j.shape)
-  # s[1] = self.seq_len
-  # j = tf.broadcast_to(j, s)
-  # # j: (batch, seq, non_knowledge_dim)
-
-  # x = tf.concat([k, j], -1)
-  # # (batch, seq, emb+non_knowledge_dim)
-
   # Augment with a position encoding
   x = x + self.pos_encoding[tf.newaxis, :self.seq_len, :]
   # (batch, seq, emb+non_knowledge_dim)
@@ -370,27 +333,6 @@ class ConditionalDist(tf.keras.layers.Layer):
 
   return z
 
-# class EncDec(tf.keras.Model):
-#  def __init__(self, *, num_heads: int, emb:int, vocab_size: int):
-#   super().__init__()
-#   self.enc = Encoder(
-#    num_heads=num_heads,
-#    input_vocab_size=vocab_size,
-#    emb=emb,
-#   )
-#   self.dec = Decoder(
-#    num_heads=num_heads,
-#    emb=emb,
-#    output_vocab_size=vocab_size,
-#   )
-
-#  # def call(self, inputs: tuple[tf.Tensor, tf.Tensor]):
-#   # x, y = inputs
-#  def call(self, x: tf.Tensor):
-#   x_enc = self.enc(x)
-#   return self.dec(x_enc)
-
- 
 # Autoencoder training step
 #
 # x shape: (batch, seq)
@@ -562,19 +504,10 @@ def train(*,
   text_j = dec(k=sampled_j, j=non_knowledge_j)# Yes, this is confusing
   text_j = tf.argmax(text_j, axis=-1)
   sampled_p_j = f(sampled_j)
-  # print(sampled_p_j.shape)
 
-  # print(text_j.shape)
   text_j_s = token_idx_tensor_to_sentences(text_j, vocab)
   for i, s in enumerate(text_j_s):
    print(f"{i} {s} {sampled_p_j[i]}")
-  # print(text_j_s)
-  # print(sampled_p_j)
-  
-  # for _ in range(samples):
-  #  sampled_k = tf.random.uniform((samples, sample_seq, emb))
-  #  text_k = dec(k=sampled_k, j=non_knowledge_j)
-  #  sampled_p_k_given_j = g(sampled_k, sampled_j)
 
     
 
