@@ -2,6 +2,7 @@
 from collections import defaultdict
 from itertools import pairwise
 import os
+from random import shuffle
 import re
 from statistics import fmean
 from typing import Generator
@@ -125,17 +126,16 @@ class PositionalEmbedding(tf.keras.layers.Layer):
  def __init__(self, *, vocab_size: int, emb: int):
   super().__init__()
   self.emb_size = emb
-  self.embedding = tf.keras.layers.Embedding(vocab_size, emb, mask_zero=True) 
+  self.embedding = tf.keras.layers.Embedding(vocab_size, emb)#, mask_zero=True) 
   self.pos_encoding = positional_encoding(length=2048, depth=emb)
 
- def compute_mask(self, *args, **kwargs):
-  return self.embedding.compute_mask(*args, **kwargs)
+ # def compute_mask(self, *args, **kwargs):
+ #  return self.embedding.compute_mask(*args, **kwargs)
 
  def call(self, x: tf.Tensor):
-  # print(f"x.get_shape: {x.get_shape()}")
   length = x.get_shape()[1]
-  # print(f"x.get_shape()[1]: {x.get_shape()[1]}")
   x = self.embedding(x)
+
   # This factor sets the relative scale of the embedding and positonal_encoding.
   x *= tf.math.sqrt(tf.cast(self.emb_size, tf.float32))
   x = x + self.pos_encoding[tf.newaxis, :length, :]
@@ -181,7 +181,13 @@ class Encoder(tf.keras.layers.Layer):
  # The "knowledge" dimension is the same as the emb dimension because it's easier that way in TF's MHA implementation
  # The number of "propositions" is the same as the sequence length for the same reason
  # A proper seq-to-seq model could allow those to differ
- def __init__(self, *, num_heads: int, input_vocab_size: int, emb: int, non_knowledge_dim: int):
+ def __init__(self, *,
+   num_heads: int,
+   input_vocab_size: int,
+   emb: int,
+   non_knowledge_dim: int,
+   propositions_per_sentence: int,
+  ):
   super().__init__()
   self.pos = PositionalEmbedding(
    vocab_size=input_vocab_size,
@@ -193,6 +199,7 @@ class Encoder(tf.keras.layers.Layer):
    EncodingSummer(),
    tf.keras.layers.Dense(non_knowledge_dim)
   ])
+  self.propositions_per_sentence = propositions_per_sentence
 
  def call(self, x: tf.Tensor):
   # (batch, seq)
@@ -203,6 +210,15 @@ class Encoder(tf.keras.layers.Layer):
 
   k = self.knowledge_extractor(x)
   # (batch, seq, emb)
+
+  k = tf.split(k, self.propositions_per_sentence, axis=1)
+  # [(batch, seq/props, emb)] * props
+
+  k = [ tf.reduce_mean(p, 1) for p in k]
+  # [(batch, emb)] * props
+
+  k = tf.stack(k, 1)
+  # (batch, prop, emb)
   
   j = self.non_knowledge_extractor(x)
   # (batch, non_knowledge_dim)
@@ -221,21 +237,57 @@ class Decoder(tf.keras.layers.Layer):
   self.seq_len = seq_len
 
  def call(self, *, k: tf.Tensor, j: tf.Tensor):
-  # k: (batch, seq, emb)
+  # k: (batch, prop, emb)
   # j: (batch, non_knowledge_dim)
 
-  j = tf.expand_dims(j, 1)
-
-  # j: (batch, 1, non_knowledge_dim)
-
-  s = list(j.shape)
-  s[1] = self.seq_len
-  j = tf.broadcast_to(j, s)
-
-  # j: (batch, seq, non_knowledge_dim)
+  # Taking the mean lets us accept arbitrary numbers of props
+  k = tf.reduce_mean(k, 1)
+  # k: (batch, emb)
 
   x = tf.concat([k, j], -1)
+  # (batch, emb+non_knowledge_dim)
+
+  x = tf.expand_dims(x, 1)
+  # (batch, 1, emb+non_knowledge_dim)
+
+  s = list(x.shape)
+  s[1] = self.seq_len
+  x = tf.broadcast_to(x, s)
   # (batch, seq, emb+non_knowledge_dim)
+
+  # props = k.shape[1]
+
+  # j = tf.expand_dims(j, 1)
+  # # j: (batch, 1, non_knowledge_dim)
+
+  # s = list(j.shape)
+  # s[1] = props
+  # j = tf.broadcast_to(j, s)
+  # # j: (batch, prop, non_knowledge_dim)
+
+  # x = tf.concat([k, j], -1)
+  # # (batch, prop, emb+non_knowledge_dim)
+
+  # del k
+  # del j
+
+  # x = tf.tile(x, (1, self.seq_len // props, 1))
+  # # (batch, seq, emb+non_knowledge_dim)
+
+  # k = tf.tile(k, (1, self.seq_len // k.shape[1], 1))
+  # # k: (batch, seq, emb)
+  # print(k.shape)
+
+  # j = tf.expand_dims(j, 1)
+  # # j: (batch, 1, non_knowledge_dim)
+
+  # s = list(j.shape)
+  # s[1] = self.seq_len
+  # j = tf.broadcast_to(j, s)
+  # # j: (batch, seq, non_knowledge_dim)
+
+  # x = tf.concat([k, j], -1)
+  # # (batch, seq, emb+non_knowledge_dim)
 
   # Augment with a position encoding
   x = x + self.pos_encoding[tf.newaxis, :self.seq_len, :]
@@ -244,6 +296,7 @@ class Decoder(tf.keras.layers.Layer):
   x = self.dec(x)
   # (batch, seq, emb+non_knowledge_dim)
 
+  # print(f"x pre emb_to_vocab: {x.shape}")
   x = self.emb_to_vocab(x)
   # (batch, seq, token)
 
@@ -398,8 +451,11 @@ def bayes_train_step(*,
 
  return loss.numpy()
 
-def numpy_to_python(t: list[np.int64]) -> list[int]:
- return [x.item() for x in t]
+# t: (batch, seq) dtype int
+def token_idx_tensor_to_sentences(t: tf.Tensor, vocab: Index) -> list[str]:
+ text = t.numpy().tolist()
+ text = [' '.join(vocab.unidx_tokens(x)) for x in text]
+ return text
 
 def train(*,
  enc_opt: tf.keras.optimizers.Optimizer,
@@ -418,7 +474,6 @@ def train(*,
  emb:int,
  non_knowledge_dim: int,
  vocab: Index,
- seq_len: int,
 ):
  train_iter = iter(train)
  valid_iter = iter(valid)
@@ -499,11 +554,10 @@ def train(*,
     
     print(f"\tvalid {e} {s} {k}: {l}")
 
-
    # Sample propositions / knowledge and show relevant marginal and conditional distributions
 
   samples = 10
-  sampled_j = tf.random.uniform((samples, seq_len, emb))
+  sampled_j = tf.random.uniform((samples, 1, emb))
   non_knowledge_j = tf.zeros((samples, non_knowledge_dim))
   text_j = dec(k=sampled_j, j=non_knowledge_j)# Yes, this is confusing
   text_j = tf.argmax(text_j, axis=-1)
@@ -511,8 +565,7 @@ def train(*,
   # print(sampled_p_j.shape)
 
   # print(text_j.shape)
-  text_j_ints = text_j.numpy().tolist()
-  text_j_s = [' '.join(vocab.unidx_tokens(x)) for x in text_j_ints]
+  text_j_s = token_idx_tensor_to_sentences(text_j, vocab)
   for i, s in enumerate(text_j_s):
    print(f"{i} {s} {sampled_p_j[i]}")
   # print(text_j_s)
@@ -540,7 +593,10 @@ if __name__ == "__main__":
  doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
 
  MAX_SEQ_LEN = 64
- BATCH=600
+ PROPS = 4# The number of propositions each sentence is mapped to
+ BATCH=500
+ EPOCHS=500
+ STEPS_PER_EPOCH=250
  MAX_VOCAB=50000
  num_heads = 8
  emb = 32
@@ -548,19 +604,25 @@ if __name__ == "__main__":
 
  vocab = Index(max_len = MAX_VOCAB)
  sentence_vecs = list()
+ # sentence_count = 0
  # word_tokenizer = tft.UnicodeScriptTokenizer()
 
  for s in sentences_dataset(doc_path, vocab, MAX_SEQ_LEN):
   sentence_vecs.append(s)
+  # sentence_count += 1
   pass# Do this to full populate the vocabulary
 
- print(f"Total sentences: {len(sentence_vecs)}")
+ sentence_count = len(sentence_vecs)
+ print(f"Total sentences: {sentence_count}")
+
+ shuffle(sentence_vecs)
 
  def dataset(filter):
   # sentences = list(sentence_vecs)
   # shuffle(sentences)
 
   data = tf.data.Dataset.from_tensor_slices(sentence_vecs)
+  # data = sentences_dataset(doc_path, vocab, MAX_SEQ_LEN)
 
   return data\
    .repeat()\
@@ -574,7 +636,6 @@ if __name__ == "__main__":
  # txt_test = dataset(lambda i, x: i % 10 == 0)
  txt_valid = dataset(lambda i, x: i % 10 == 1)
 
-
  enc_opt = Adam()
  dec_opt = Adam()
  f_opt = Adam()
@@ -585,6 +646,7 @@ if __name__ == "__main__":
   input_vocab_size=len(vocab),
   emb=emb,
   non_knowledge_dim=non_knowledge_dim,
+  propositions_per_sentence=PROPS,
  )
  dec = Decoder(
   num_heads=num_heads,
@@ -609,8 +671,8 @@ if __name__ == "__main__":
   dec_opt=dec_opt,
   f_opt=f_opt,
   h_opt=h_opt,
-  epochs=20,
-  steps_per_epoch=250,
+  epochs=EPOCHS,
+  steps_per_epoch=STEPS_PER_EPOCH,
   valid_steps_per_epoch=25,
   enc=enc,
   dec=dec,
@@ -621,5 +683,4 @@ if __name__ == "__main__":
   emb=emb,
   non_knowledge_dim=non_knowledge_dim,
   vocab=vocab,
-  seq_len=MAX_SEQ_LEN,
  )
