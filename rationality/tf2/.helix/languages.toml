@@ -1,0 +1,15 @@
+[[language]]
+name = "python"
+auto-format = true
+language-servers = ["pylsp"]
+injection-regex = "python"
+file-types = ["py"]
+indent = { tab-width = 1, unit = " " }
+formatter = { command = "rationality-black" }
+
+[language-server.pylsp]
+command = "rationality-pylsp"
+
+[language-server.pylsp.config.pylsp]
+plugins.pylsp_mypy.enabled = true
+plugins.pylsp_mypy.live_mode = true
