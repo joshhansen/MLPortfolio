@@ -14,6 +14,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow.keras.optimizers import Adam
 
+# Read a file and yield its sentences as returned by the default NLTK tokenzier
 def sentences(path: str) -> Generator[str, None, None]:
  with open(path) as r:
   text = r.read()
@@ -33,10 +34,8 @@ class Index:
 
  def idx(self, s: str) -> int:
   try:
-   idx = self._idx[s]
-   self._freqs[s] += 1
-   return idx
-  except:
+   return self._idx[s]
+  except KeyError:
    n = len(self)
    if n >= self._max_len:
     return self._unk_idx
@@ -48,7 +47,7 @@ class Index:
  def unidx(self, idx: int) -> str:
   try:
    return self._unidx[idx]
-  except:
+  except KeyError:
    return self._unk
 
  def idx_tokens(self, tokens: list[str]) -> list[int]:
@@ -190,7 +189,10 @@ class Encoder(tf.keras.layers.Layer):
    vocab_size=input_vocab_size,
    emb=emb,
   )
-  self.knowledge_extractor = MhaResLayerNorm(num_heads=num_heads, emb=emb)
+  self.knowledge_extractor = tf.keras.Sequential([
+   MhaResLayerNorm(num_heads=num_heads, emb=emb),
+   MhaResLayerNorm(num_heads=num_heads, emb=emb),
+  ])
   self.non_knowledge_extractor = tf.keras.Sequential([
    MhaResLayerNorm(num_heads=num_heads, emb=emb),
    EncodingSummer(),
@@ -227,7 +229,10 @@ class Decoder(tf.keras.layers.Layer):
  def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int, seq_len: int, non_knowledge_dim: int):
   super().__init__()
   self.pos_encoding = positional_encoding(length=seq_len, depth=emb+non_knowledge_dim)
-  self.dec = MhaResLayerNorm(num_heads=num_heads, emb=emb+non_knowledge_dim)
+  self.dec = tf.keras.Sequential([
+   MhaResLayerNorm(num_heads=num_heads, emb=emb+non_knowledge_dim),
+   MhaResLayerNorm(num_heads=num_heads, emb=emb+non_knowledge_dim),
+  ])
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
   self.softmax = tf.keras.layers.Softmax()
@@ -388,8 +393,31 @@ def bayes_train_step(*,
   enc_opt.apply_gradients(zip(enc_grads, enc.trainable_weights))
   f_grads = tape.gradient(loss, f.trainable_weights)
   f_opt.apply_gradients(zip(f_grads, f.trainable_weights))
-  h_grads = tape.gradient(loss, enc.trainable_weights)
-  h_opt.apply_gradients(zip(h_grads, enc.trainable_weights))
+  h_grads = tape.gradient(loss, h.trainable_weights)
+  h_opt.apply_gradients(zip(h_grads, h.trainable_weights))
+
+ return loss.numpy()
+
+# Try to enforce P(x|x) = 1.0
+# x shape: (batch, prop, emb)
+def self_cond_prob_is_one_train_step(*,
+ enc_opt: tf.keras.optimizers.Optimizer,
+ h_opt: tf.keras.optimizers.Optimizer,
+ enc: Encoder,
+ h: ConditionalDist,
+ x: tf.Tensor,
+ train = True,
+):
+ with tf.GradientTape(persistent=True) as tape:
+  k, _j = enc(x)
+  loss = ( 1.0 - h(k, k) ) ** 2
+  loss = tf.reduce_mean(loss)
+
+ if train:
+  enc_grads = tape.gradient(loss, enc.trainable_weights)
+  enc_opt.apply_gradients(zip(enc_grads, enc.trainable_weights))
+  h_grads = tape.gradient(loss, h.trainable_weights)
+  h_opt.apply_gradients(zip(h_grads, h.trainable_weights))
 
  return loss.numpy()
 
@@ -454,6 +482,15 @@ def train(*,
      y=b,
    ))
 
+   # # self-cond-prob of 1.0 error
+   # losses['self_cond_prob_1'].append(self_cond_prob_is_one_train_step(
+   #   enc_opt=enc_opt,
+   #   h_opt=h_opt,
+   #   enc=enc,
+   #   h=h,
+   #   x=a,
+   # ))
+
    loss_keys = list(sorted(losses.keys()))
    for k in loss_keys:
     l = fmean(losses[k])
@@ -489,6 +526,16 @@ def train(*,
      y=b,
      train=False,
    ))
+
+   # # self-cond-prob of 1.0 error
+   # losses['self_cond_prob_1'].append(self_cond_prob_is_one_train_step(
+   #   enc_opt=enc_opt,
+   #   h_opt=h_opt,
+   #   enc=enc,
+   #   h=h,
+   #   x=a,
+   #   train=False,
+   # ))
   
    valid_loss_keys = list(sorted(valid_losses.keys()))
    for k in valid_loss_keys:
@@ -496,25 +543,62 @@ def train(*,
     
     print(f"\tvalid {e} {s} {k}: {l}")
 
-   # Sample propositions / knowledge and show relevant marginal and conditional distributions
-
+  # Sample propositions / knowledge and show relevant marginal and conditional distributions
   samples = 10
-  sampled_j = tf.random.uniform((samples, 1, emb))
-  non_knowledge_j = tf.zeros((samples, non_knowledge_dim))
-  text_j = dec(k=sampled_j, j=non_knowledge_j)# Yes, this is confusing
-  text_j = tf.argmax(text_j, axis=-1)
-  sampled_p_j = f(sampled_j)
+  sampled_k = tf.random.uniform((samples, 1, emb))
+  sampled_j = tf.zeros((samples, non_knowledge_dim))
+  sampled_text = dec(k=sampled_k, j=sampled_j)
+  sampled_text = tf.argmax(sampled_text, axis=-1)
+  sampled_prob = f(sampled_k)
 
-  text_j_s = token_idx_tensor_to_sentences(text_j, vocab)
-  for i, s in enumerate(text_j_s):
-   print(f"{i} {s} {sampled_p_j[i]}")
+  sampled_text_s = token_idx_tensor_to_sentences(sampled_text, vocab)
+  for i, s in enumerate(sampled_text_s):
+   print(f"{i} {s} {sampled_prob[i]}")
 
+  sentence = "the dog is purple"
+  tokens = tokenize_words(sentence, 64)
+  sentence_token_indices = [vocab.idx_tokens(tokens)]
+  sentence_token_indices = tf.constant(sentence_token_indices, dtype=tf.int32)
+  sentence_k, sentence_j = enc(sentence_token_indices)
+  sentence_prob = f(sentence_k)
+  sentence_out = dec(k=sentence_k, j=sentence_j)
+  sentence_out = tf.argmax(sentence_out, axis=-1)
+  sentence_out = token_idx_tensor_to_sentences(sentence_out, vocab)
+  print(f"P({sentence}) = {sentence_prob}")
+  print(tokens)
+  print(sentence_out)
+
+  # # Split out each "proposition" and render it as text independently
+  for prop_idx in range(sentence_k.shape[1]):
+   prop = sentence_k[0, prop_idx, :]
+   prop = tf.reshape(prop, (1, 1, prop.shape[-1]))
+   prop_out = dec(k=prop, j=sentence_j)
+   prop_out = tf.argmax(prop_out, axis=-1)
+   prop_out = token_idx_tensor_to_sentences(prop_out, vocab)
+   print(f"prop {prop_idx}: {prop_out}")
     
+  def evaluate(sentences: list[str]):
+   tokens = [tokenize_words(s, 64) for s in sentences]
+   token_indices = [ [vocab.idx_tokens(t)] for t in tokens]
+   token_indices_tensors = [ tf.constant(ti, dtype=tf.int32) for ti in token_indices ]
+   kjs = [ enc(ti) for ti in token_indices_tensors ]
+   ks = [ kj[0] for kj in kjs ]
+   # js = [ kj[1] for kj in kjs ]
 
-    
+   for i, k0 in enumerate(ks):
+    print(f"P({sentences[i]}) = {f(k0)}")
 
-   
-    
+    for j, k1 in enumerate(ks):
+     cond_prob = h(k1, k0)
+     print(f"P({sentences[j]}|{sentences[i]}) = {cond_prob}")
+
+  evaluate([
+   "the dog is purple",
+   "the cat just ate dinner",
+   "the cat is hungry",
+   "the dog is not purple"         
+  ])
+      
 
 word_rgx = re.compile("[A-Za-z0-9']+")
 if __name__ == "__main__":
@@ -526,7 +610,7 @@ if __name__ == "__main__":
  doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
 
  MAX_SEQ_LEN = 64
- PROPS = 4# The number of propositions each sentence is mapped to
+ PROPS = 1# The number of propositions each sentence is mapped to
  BATCH=500
  EPOCHS=500
  STEPS_PER_EPOCH=250
