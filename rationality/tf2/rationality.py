@@ -183,6 +183,7 @@ class Encoder(tf.keras.layers.Layer):
    emb: int,
    non_knowledge_dim: int,
    propositions_per_sentence: int,
+   attn_layers: int,
   ):
   super().__init__()
   self.pos = PositionalEmbedding(
@@ -191,8 +192,7 @@ class Encoder(tf.keras.layers.Layer):
   )
   self.knowledge_extractor = tf.keras.Sequential([
    MhaResLayerNorm(num_heads=num_heads, emb=emb),
-   MhaResLayerNorm(num_heads=num_heads, emb=emb),
-  ])
+  ] * attn_layers)
   self.non_knowledge_extractor = tf.keras.Sequential([
    MhaResLayerNorm(num_heads=num_heads, emb=emb),
    EncodingSummer(),
@@ -226,13 +226,19 @@ class Encoder(tf.keras.layers.Layer):
 
 # "Knowledge" and non-knowledge content to text
 class Decoder(tf.keras.layers.Layer):
- def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int, seq_len: int, non_knowledge_dim: int):
+ def __init__(self, *,
+   num_heads: int,
+   emb: int,
+   output_vocab_size: int,
+   seq_len: int,
+   non_knowledge_dim: int,
+   attn_layers: int,
+  ):
   super().__init__()
   self.pos_encoding = positional_encoding(length=seq_len, depth=emb+non_knowledge_dim)
   self.dec = tf.keras.Sequential([
    MhaResLayerNorm(num_heads=num_heads, emb=emb+non_knowledge_dim),
-   MhaResLayerNorm(num_heads=num_heads, emb=emb+non_knowledge_dim),
-  ])
+  ] * attn_layers)
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
   self.softmax = tf.keras.layers.Softmax()
@@ -607,7 +613,7 @@ if __name__ == "__main__":
  data_dir = '/blok/@data'
  guten_dir = os.path.join(data_dir, 'org', 'gutenberg')
  doc_path = os.path.join(guten_dir, 'pg34901-on-liberty.txt')
- doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
+ # doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
 
  MAX_SEQ_LEN = 64
  PROPS = 1# The number of propositions each sentence is mapped to
@@ -618,6 +624,7 @@ if __name__ == "__main__":
  num_heads = 8
  emb = 32
  non_knowledge_dim = 4
+ ATTN_LAYERS=6
 
  vocab = Index(max_len = MAX_VOCAB)
  sentence_vecs = list()
@@ -664,6 +671,7 @@ if __name__ == "__main__":
   emb=emb,
   non_knowledge_dim=non_knowledge_dim,
   propositions_per_sentence=PROPS,
+  attn_layers=ATTN_LAYERS,
  )
  dec = Decoder(
   num_heads=num_heads,
@@ -671,6 +679,7 @@ if __name__ == "__main__":
   emb=emb,
   non_knowledge_dim=non_knowledge_dim,
   seq_len=MAX_SEQ_LEN,
+  attn_layers=ATTN_LAYERS,
  )
  f = MarginalDist(
   num_heads=num_heads,
