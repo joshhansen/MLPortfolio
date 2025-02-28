@@ -14,14 +14,6 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow.keras.optimizers import Adam
 
-# Read a file and yield its sentences as returned by the default NLTK tokenzier
-def sentences(path: str) -> Generator[str, None, None]:
- with open(path) as r:
-  text = r.read()
-
- text = text.replace('\n', ' ')
-
- return nltk.tokenize.sent_tokenize(text)
  
 class Index:
  def __init__(self, *, unk: str = '<unk>', max_len: int):
@@ -71,37 +63,96 @@ class Index:
  def __len__(self) -> int:
   return len(self._idx)
    
+# If pad is None then no padding will occur
 def tokenize_words(s: str, max_len: int, pad='<pad>') -> list[str]:
- words: list[str] = list()
+ words = nltk.tokenize.word_tokenize(s)
+ # words: list[str] = list()
 
- for m in word_rgx.finditer(s):
-  if len(words) < max_len:
-   words.append(m.group(0))
+ # for m in word_rgx.finditer(s):
+ #  if len(words) < max_len:
+ #   words.append(m.group(0))
 
- if len(words) < max_len:
-  padding_needed = max_len - len(words)
-  padding = [pad] * padding_needed
-  words.extend(padding)
+ if pad is not None:
+   if len(words) < max_len:
+    padding_needed = max_len - len(words)
+    padding = [pad] * padding_needed
+    words.extend(padding)
 
  return words
-  
 
-def _gen_sentences_dataset(path: str, vocab: Index, seq_len: int):
+# Read a file and yield its sentences as returned by the default NLTK tokenzier
+def sentences(path: str) -> Generator[str, None, None]:
+ with open(path) as r:
+  text = r.read()
+
+ text = text.replace('\n', ' ')
+
+ return nltk.tokenize.sent_tokenize(text)
+
+# Yields (doc_idx, doc_path, sentence) pairs
+def multi_sentences(base_dir: str):
+ doc_idx = 0
+ for dirpath, subdirs, filenames in os.walk(base_dir):
+  for filename in filenames:
+   if filename.endswith('.txt'):
+    path = os.path.join(dirpath, filename)
+
+    for s in sentences(path):
+     yield (doc_idx, path, s)
+
+    doc_idx += 1
+
+# Yields (doc_idx, sentence_tokens) pairs
+def multi_sentence_tokens(base_dir: str, max_len: int, pad = '<str>'):
+ for doc_idx, doc_path, sentence in multi_sentences(base_dir):
+  yield doc_idx, doc_path, tokenize_words(sentence, max_len=max_len, pad=pad)
+
+def _gen_raw_sentences_dataset(path: str, seq_len: int):
  print(f"Sentences initializing for {path}")
  for s in sentences(path):
   s = s.lower()
 
-  tokens = tokenize_words(s, MAX_SEQ_LEN)
+  yield tf.constant(tokenize_words(s, seq_len), dtype=tf.string)
 
-  indices = vocab.idx_tokens(tokens)
+def raw_sentences_dataset(path: str, seq_len: int):
+ gen = lambda: _gen_raw_sentences_dataset(path, seq_len)
 
-  yield tf.constant(indices, dtype=tf.int32)
+ return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.string))
 
+# def _gen_multi_sentences_dataset(base_dir: str, seq_len: int):
+#  for doc_idx, sentence in multi_sentences(base_dir):
+#   yield (
+#    tf.constant(doc_idx, dtype=tf.int32),
+#    tf.constant(sentence, dtype=tf.string),
+#   )
+
+#  print(f"Walking {base_dir}")
+#  doc_idx = 0
+#  for dirpath, subdirs, filenames in os.walk(base_dir):
+#   print(dirpath)
+#   print(subdirs)
+#   print(filenames)
+#   for filename in filenames:
+#    if filename.endswith('.txt'):
+#     path = os.path.join(dirpath, filename)
+
+#     yield from raw_sentences_dataset(path, seq_len).map(lambda tokens: (tf.constant(doc_idx, dtype=tf.int32), tokens))
+
+#     doc_idx += 1
+
+def raw_multi_sentences_dataset(base_dir: str, seq_len: int):
+ gen = lambda: _gen_raw_multi_sentences_dataset(base_dir, seq_len)
+ return tf.data.Dataset.from_generator(gen, output_signature=(
+  tf.TensorSpec(shape=(), dtype=tf.int32),
+  tf.TensorSpec(shape=(seq_len,), dtype=tf.string),
+ ))
 
 def sentences_dataset(path: str, vocab: Index, seq_len: int):
-    gen = lambda: _gen_sentences_dataset(path, vocab, seq_len)
+ return raw_sentences_dataset(path, seq_len).map(lambda tokens: vocab.idx_tokens(tokens))
 
-    return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32))
+# Yields (doc_idx, token_indices_tensor) pairs
+def multi_sentences_dataset(base_dir: str, vocab: Index, seq_len: int):
+ return raw_multi_sentences_dataset(path, seq_len).map(lambda doc_idx, tokens: (doc_idx, vocab.idx_tokens(tokens)))
 
 def positional_encoding(length: int, depth: float):
   depth = depth/2
@@ -606,7 +657,18 @@ def train(*,
   ])
       
 
-word_rgx = re.compile("[A-Za-z0-9']+")
+word_rgx = re.compile("[A-Za-z0-9]+")
+MAX_SEQ_LEN = 64
+PROPS = 1# The number of propositions each sentence is mapped to
+BATCH=500
+EPOCHS=500
+STEPS_PER_EPOCH=250
+MAX_VOCAB=50000
+num_heads = 8
+emb = 32
+non_knowledge_dim = 4
+ATTN_LAYERS=6
+
 if __name__ == "__main__":
  # home_dir = os.environ['HOME']
  # data_dir = os.path.join(home_dir, 'Data')
@@ -615,16 +677,6 @@ if __name__ == "__main__":
  doc_path = os.path.join(guten_dir, 'pg34901-on-liberty.txt')
  # doc_path = os.path.join(guten_dir, 'pg3200-mark-twain-files.txt')
 
- MAX_SEQ_LEN = 64
- PROPS = 1# The number of propositions each sentence is mapped to
- BATCH=500
- EPOCHS=500
- STEPS_PER_EPOCH=250
- MAX_VOCAB=50000
- num_heads = 8
- emb = 32
- non_knowledge_dim = 4
- ATTN_LAYERS=6
 
  vocab = Index(max_len = MAX_VOCAB)
  sentence_vecs = list()
