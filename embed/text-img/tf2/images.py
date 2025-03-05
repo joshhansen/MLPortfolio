@@ -7,7 +7,7 @@ import tensorflow as tf
 from PIL import UnidentifiedImageError
 
 
-def _gen_images_dataset(path: Path, category: str, rescale_width: int, rescale_height: int):
+def _gen_images_dataset(path: Path, category: str, rescale_width = None, rescale_height = None, standardize = True):
     print(f"Images initializing for {path}")
 
     for i, f in enumerate(os.listdir(path)):
@@ -30,13 +30,17 @@ def _gen_images_dataset(path: Path, category: str, rescale_width: int, rescale_h
             try:
                 img = tf.keras.utils.load_img(img_path)
 
-                img = tf.image.resize(img, (rescale_width, rescale_height))
+                if rescale_width is not None and rescale_height is not None:
+                    img = tf.image.resize(img, (rescale_width, rescale_height))
+
+                if standardize:
+                    img = tf.cast(img, dtype=tf.float32) / 255.
 
                 yield img
             except UnidentifiedImageError as e:
                 print(f"Error loading image: {img_path}: {e}")
 
-def images_dataset(path: Path, category: str, rescale_width: int, rescale_height: int):
-    gen = lambda: _gen_images_dataset(path, category, rescale_width, rescale_height)
+def images_dataset(path: Path, category: str, rescale_width = None, rescale_height = None, standardize = True):
+    gen = lambda: _gen_images_dataset(path, category, rescale_width=rescale_width, rescale_height=rescale_height, standardize=standardize)
 
     return tf.data.Dataset.from_generator(gen, output_signature=tf.TensorSpec(shape=(None, None, 3,), dtype=tf.float32))
