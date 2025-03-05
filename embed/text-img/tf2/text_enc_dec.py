@@ -26,22 +26,27 @@ def positional_encoding(length: int, depth: float):
   return tf.cast(pos_encoding, dtype=tf.float32)
 
 class PositionalEmbedding(tf.keras.layers.Layer):
- def __init__(self, *, vocab_size: int, emb: int):
+ def __init__(self, *, vocab_size: int, emb: int, length: int):
   super().__init__()
   self.emb_size = emb
   self.embedding = tf.keras.layers.Embedding(vocab_size, emb, mask_zero=True) 
-  self.pos_encoding = positional_encoding(length=2048, depth=emb)
+  self.pos_encoding = positional_encoding(length=length, depth=emb)
 
- def compute_mask(self, *args, **kwargs):
-  return self.embedding.compute_mask(*args, **kwargs)
+ # def compute_mask(self, *args, **kwargs):
+ #  return self.embedding.compute_mask(*args, **kwargs)
 
  def call(self, x: tf.Tensor):
+  print(f"pos emb x shape: {x.shape}")
   # print(f"x.get_shape: {x.get_shape()}")
   length = x.get_shape()[1]
   # print(f"x.get_shape()[1]: {x.get_shape()[1]}")
   x = self.embedding(x)
+  print(f"x shape 2: {x.shape}")
   # This factor sets the relative scale of the embedding and positonal_encoding.
   x *= tf.math.sqrt(tf.cast(self.emb_size, tf.float32))
+  print(f"x shape 3: {x.shape}")
+  emb_ = self.pos_encoding[tf.newaxis, :length, :]
+  print(f"emb_ shape: {emb_.shape}")
   x = x + self.pos_encoding[tf.newaxis, :length, :]
   return x
 
@@ -79,6 +84,68 @@ class MhaResLayerNorm(tf.keras.layers.Layer):
 
   return x
 
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print(f"{tab}MhaResLayerNorm")
+  for w in self.mha.weights:
+   print(f"{tab}\t{w.name}: {w.shape}")
+
+ def size(self):
+  size = 0
+  for w in self.mha.weights:
+   size += tf.size(w)
+
+  return size
+
+class FfResLayerNorm(tf.keras.layers.Layer):
+ def __init__(self, *, emb: int, dff: int):
+  super().__init__()
+  #FIXME check why these consume so much memory
+  self.ff1 = tf.keras.layers.Dense(dff, activation='relu')
+  self.ff2 = tf.keras.layers.Dense(emb)
+  self.layernorm = tf.keras.layers.LayerNormalization()
+  self.add = tf.keras.layers.Add()
+
+ def call(self, x: tf.Tensor):
+  # (batch, seq, emb)
+
+  ff = self.ff1(x)
+  # (batch, seq, dff)
+
+  ff = self.ff2(ff)
+  # (batch, seq, emb)  
+
+  x = self.add([x, ff])
+  # (batch, seq, emb)
+
+  x = self.layernorm(x)
+  # (batch, seq, emb)
+
+  return x
+
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print(f"{tab}FfResLayerNorm")
+  print(f"{tab}\tff1: {self.ff1.kernel.shape}")
+  print(f"{tab}\tff2: {self.ff2.kernel.shape}")
+ 
+class TransformerLayer(tf.keras.layers.Layer):
+ def __init__(self, *, num_heads: int, emb: int, dff: int):
+  super().__init__()
+  self.mha_l = MhaResLayerNorm(num_heads=num_heads, emb=emb)
+  self.ff_l = FfResLayerNorm(emb=emb, dff=dff)
+
+ def call(self, x: tf.Tensor):
+  # (batch, seq, emb)
+  return self.ff_l(self.mha_l(x))
+
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print(f"{tab}TransformerLayer")
+  self.mha_l.print(depth=depth+1)
+  self.ff_l.print(depth=depth+1)
+ 
+
 class EncodingSummer(tf.keras.layers.Layer):
  def call(self, x: tf.Tensor):
   # (batch, seq, emb)
@@ -86,20 +153,26 @@ class EncodingSummer(tf.keras.layers.Layer):
   # (batch, emb)
   return x
 
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print(f"{tab}EncodingSummer")
+
 # Encodes a sequence as an emb-length vector with no other context
 class Encoder(tf.keras.layers.Layer):
- def __init__(self, *, num_heads: int, input_vocab_size: int, emb: int):
+ def __init__(self, *, layers: int, num_heads: int, input_vocab_size: int, emb: int, dff: int):
   super().__init__()
   self.pos = PositionalEmbedding(
    vocab_size=input_vocab_size,
    emb=emb,
+   length=MAX_STR_LEN-1
   )
-  self.enc = tf.keras.Sequential([
-   MhaResLayerNorm(num_heads=num_heads, emb=emb),
-   EncodingSummer(),
-  ])
+  self.enc = tf.keras.Sequential(
+   [TransformerLayer(num_heads=num_heads, emb=emb, dff=dff)] * layers
+   + [EncodingSummer()]
+  )
 
  def call(self, x: tf.Tensor):
+  print(f"txt enc x shape: {x.shape}")
   # (batch, seq)
 
   x = self.pos(x)
@@ -112,16 +185,24 @@ class Encoder(tf.keras.layers.Layer):
 
   return x
 
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print(f"{tab}Encoder")
+  for l in self.enc.layers:
+   l.print(depth=depth+1)
+   
+
 class Decoder(tf.keras.layers.Layer):
- def __init__(self, *, num_heads: int, emb: int, output_vocab_size: int):
+ def __init__(self, *, layers: int, num_heads: int, emb: int, dff: int, output_vocab_size: int):
   super().__init__()
-  self.pos_encoding = positional_encoding(length=2048, depth=emb)
-  self.dec = MhaResLayerNorm(num_heads=num_heads, emb=emb)
+  self.pos_encoding = positional_encoding(length=MAX_STR_LEN-1, depth=emb)
+  self.dec = tf.keras.Sequential([TransformerLayer(num_heads=num_heads, emb=emb, dff=dff)] * layers)
   self.emb_size = emb
   self.emb_to_vocab = tf.keras.layers.Dense(output_vocab_size)
   self.softmax = tf.keras.layers.Softmax()
 
  def call(self, x: tf.Tensor):
+  print(f"txt dec x shape: {x.shape}")
   # (batch, emb)
 
   # Add a cardinality 1 dimension at index 1
@@ -150,17 +231,30 @@ class Decoder(tf.keras.layers.Layer):
 
   return x
 
+ def print(self, depth=0):
+  tab = "\t" * depth
+
+  print(f"{tab}Decoder")
+  for l in self.dec.layers:
+   l.print(depth=depth+1)
+  print(f"{tab}\temb_to_vocab: {self.emb_to_vocab.kernel.shape}")
+   
+
 class EncDec(tf.keras.Model):
- def __init__(self, *, num_heads: int, emb:int, vocab_size: int):
+ def __init__(self, *, layers: int, num_heads: int, emb:int, dff: int, vocab_size: int):
   super().__init__()
   self.enc = Encoder(
+   layers=layers,
    num_heads=num_heads,
    input_vocab_size=vocab_size,
    emb=emb,
+   dff=dff,
   )
   self.dec = Decoder(
+   layers=layers,
    num_heads=num_heads,
    emb=emb,
+   dff=dff,
    output_vocab_size=vocab_size,
   )
 
@@ -169,6 +263,15 @@ class EncDec(tf.keras.Model):
  def call(self, x: tf.Tensor):
   x_enc = self.enc(x)
   return self.dec(x_enc)
+
+ def print(self, depth=0):
+  tab = "\t" * depth
+  print("f{tab}EncDec")
+  self.enc.print(depth=depth+1)
+  self.dec.print(depth=depth+1)
+
+ def size(self):
+  return self.enc.size() + self.dec.size()
   
 # Returns train, valid, grapheme_count
 def load_datasets() -> tuple[tf.data.Dataset, tf.data.Dataset, GraphemeIdx]:
@@ -234,12 +337,23 @@ class TextCallback(tf.keras.callbacks.Callback):
   
 
 if __name__=="__main__":
+  import argparse
+  parser = argparse.ArgumentParser(
+   description="Text encoder/decoder",
+  )
+  # parser.add_argument('train_path')
+  # parser.add_argument('valid_path')
+  parser.add_argument('output_dir')
+  args = parser.parse_args()
+
+  os.makedirs(args.output_dir, exist_ok=True)
+
 
   train, valid, grapheme_idx = load_datasets()
 
-  # num_layers = 4
+  layers = 2
   d_model = 128
-  # dff = 512
+  dff = 4 * d_model
   num_heads = 8
   # dropout_rate = 0.1
 
@@ -272,8 +386,10 @@ if __name__=="__main__":
  #  )
 
   m = EncDec(
+   layers=layers,
    num_heads=num_heads,
    emb=d_model,
+   dff=dff,
    vocab_size=grapheme_count,
   )
 
@@ -302,18 +418,27 @@ if __name__=="__main__":
   # print(y_emb)
   # optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3, beta_1=0.9, beta_2=0.98,
   #                                    epsilon=1e-9)
-  loss = tf.keras.losses.SparseCategoricalCrossentropy(
-    # from_logits=True,
-    # reduction='none'
-  )
+
+  callbacks = [
+   tf.keras.callbacks.ModelCheckpoint(
+      filepath=f"{args.output_dir}/best.keras",
+      monitor='val_loss',
+      mode='min',
+      save_best_only=True
+   ),
+   TextCallback(args.output_dir, valid, grapheme_idx),
+  ]
 
   m.compile(
-   loss=loss,
-   optimizer='adam',
+   loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+   optimizer='sgd',
    run_eagerly=True,
   )
 
-  m.fit(train, epochs=100, validation_data=valid, callbacks=[TextCallback('/tmp', valid, grapheme_idx)])
+  m.print()
+  # print(m.size()) #FIXME
+
+  m.fit(train, epochs=500, validation_data=valid, callbacks=callbacks)
 
   # with open('/tmp/texts', 'w') as w:
   #  s, _ = next(iter(valid))
