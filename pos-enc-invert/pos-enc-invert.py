@@ -37,11 +37,12 @@ def sin_cos_pos_enc_arr(length: int, depth: int) -> jax.Array:
 # between locations
 def normal_pos_enc_arr(length: int, depth: int, key: jax.Array) -> jax.Array:
  interval = float(length) / float(depth)
+ # interval = 100
 
  means = jnp.arange(depth) * interval
- print(f"{means=}")
- variances = jax.random.normal(key, (depth,)) * length
- print(f"{variances=}")
+ # variances = jax.random.normal(key, (depth,)) * length
+ # variances = (jnp.arange(depth) + 1).astype(jnp.float32)
+ variances = jnp.ones((depth,))
 
  position_probs: list[jax.Array] = list()
  for pos in range(length):
@@ -54,12 +55,10 @@ class Model(nnx.Module):
   self.linear = nnx.Linear(in_features=in_features, out_features=1, rngs=rngs)
 
  def __call__(self, x: jax.Array) -> jax.Array:
-  print(f"model call {x.shape=}")
   return nnx.sigmoid(self.linear(x))[:, 0]
 
 @nnx.jit
 def train_step(model: Model, optimizer, x: jax.Array, y: jax.Array):
- print(f"train_step: {x.shape =} {y.shape =}")
  def loss_fn(model: Model):
    y_pred = model(x)
    return optax.losses.squared_error(y_pred, y).mean()
@@ -70,49 +69,52 @@ def train_step(model: Model, optimizer, x: jax.Array, y: jax.Array):
  return loss
 
 if __name__=="__main__":
- key = jr.key(493893)
-
+ inits = 20
  d_model = 32
  max_len = 100
- iters = 1000
+ batch = 1000
+ print(f"{inits=}")
+ print(f"{d_model=}")
+ print(f"{max_len=}")
+ print(f"{batch=}")
 
- encodings = {
-  'sincos': sin_cos_pos_enc_arr(max_len, d_model),
-  'norm': normal_pos_enc_arr(max_len, d_model, key),
- }
+ for init in range(inits):
+  key = jr.key(init)
+  k0, k1 = jr.split(key, 2)
 
- rngs = nnx.Rngs(0)
+  encodings = {
+   'sincos': sin_cos_pos_enc_arr(max_len, d_model),
+   'norm': normal_pos_enc_arr(max_len, d_model, k0),
+  }
 
- # Models trying to recover the encoded position
- models = {
-  'sincos': Model(in_features=d_model, rngs=rngs),
-  'norm': Model(in_features=d_model, rngs=rngs)
- }
+  rngs = nnx.Rngs(k1)
 
- optimizers = dict()
- for k,v in models.items():
-  optimizers[k] = nnx.Optimizer(v, optax.adam(1e-3))
+  # Models trying to recover the encoded position
+  models = {
+   'sincos': Model(in_features=d_model, rngs=rngs),
+   'norm': Model(in_features=d_model, rngs=rngs)
+  }
 
- total_losses: dict[str,float] = defaultdict(float)
- count = 0
+  optimizers = dict()
+  for k,v in models.items():
+   optimizers[k] = nnx.Optimizer(v, optax.adam(1e-1))
 
- def mean_loss(name: str):
-  return total_losses[name] / count
+  total_losses: dict[str,float] = defaultdict(float)
+  count = 0
 
- x = jnp.arange(max_len) / max_len
- print(f"{ x.shape = }")
+  def mean_loss(name: str):
+   return total_losses[name] / count
 
- for _ in range(iters):
-  count += 1
-  for name, enc in encodings.items():
-   m = models[name]
+  x = jnp.arange(max_len) / max_len
 
-   pe = enc[:max_len, :]
-   print(f"{pe.shape=}")
+  for count in range(batch):
+   for name, enc in encodings.items():
+    m = models[name]
 
-   loss = train_step(m, optimizers[name], pe, x)
-   print(f"{name} {loss=}")
-   total_losses[name] += loss
-   print(f"{name} total loss {total_losses[name]}")
+    pe = enc[:max_len, :]
 
-   print(f"{name} mean loss: {mean_loss(name)}")
+    loss = train_step(m, optimizers[name], pe, x)
+    total_losses[name] += loss
+
+  for name in encodings.keys():
+   print(f"{init=} {name} mean loss: {mean_loss(name)}")
