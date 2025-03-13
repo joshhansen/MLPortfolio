@@ -30,22 +30,6 @@ def sin_cos_pos_enc_arr(length: int, depth: int) -> jax.Array:
 
  return jnp.concatenate([s, c], axis=-1)# (seq, depth)
 
-def sin_cos_pos_enc(pos: jax.Array, d_model: int, max_len: int):
- e = jnp.empty((d_model,))
- x = pos / (max_len ** jnp.arange(d_model / 2) / d_model)
-
- e = e.at[0::2].set(jnp.sin(x))
- e = e.at[1::2].set(jnp.cos(x))
-
- return e
-
-sin_cos_pos_enc_batched = jax.vmap(sin_cos_pos_enc, (0, None, None), 0)
-
-def normal_pos_enc(pos: jax.Array, means: jax.Array, variances: jax.Array):
- return jnp.array([jax.scipy.stats.norm.pdf(pos, loc=means[i], scale=variances[i]) for i in range(d_model)])
-
-normal_pos_enc_batched = jax.vmap(normal_pos_enc, (0, None, None), 0)
-
 # Generates a (randomly initialized) normal distribution position encoding
 # Each dimension of the encoding is a probability from a random univariate
 # gaussian. The distributions are scaled by the length and the means
@@ -64,49 +48,7 @@ def normal_pos_enc_arr(length: int, depth: int, key: jax.Array) -> jax.Array:
   position_probs.append(jax.scipy.stats.norm.pdf(pos, loc=means, scale=variances))
 
  return jnp.stack(position_probs)# (length, depth)
-  
  
-
-# class PosEnc:
-#  def __call__(self, pos: int) -> jax.Array:
-#   raise NotImplemented
-
-# @dataclass
-# class SinCosPosEnc(PosEnc):
-#  d_model: int
-#  max_len: int
-
-#  def __call__(self, pos: int):
-#   e = jnp.empty((self.d_model,))
-#   x = pos / (self.max_len ** jnp.arange(self.d_model / 2) / self.d_model)
-
-#   e = e.at[0::2].set(jnp.sin(x))
-#   e = e.at[1::2].set(jnp.cos(x))
-
-#   return e
-
-# class NormalPosEnc(PosEnc):
-#  d_model: int
-
-#  def __init__(self, key: jax.Array, d_model: int, max_len: int):
-#   self.d_model = d_model
-  
-#   k0, k1 = jr.split(key, 2)
-#   self.means = jr.normal(k0, (d_model,)) * max_len
-#   self.variances = jr.normal(k1, (d_model,)) * max_len
-
-#   # self.sigma = jr.normal(k1, (d_model, d_model)) * max_len
-#   # self.sigma = jnp.matmul(self.sigma.transpose(), self.sigma)
-
-#   # print(f"mu: {self.mu}")
-#   # print(f"sigma: {self.sigma}")
-
-#  def __call__(self, pos: int):
-#   x = jnp.repeat(pos, self.d_model)
-#   probs = [ jax.scipy.stats.norm.pdf(pos, loc=self.means[i], scale=self.variances[i]) for i in range(self.d_model) ]
-
-#   return jnp.array(probs)
-
 class Model(nnx.Module):
  def __init__(self, *, in_features: int, rngs: nnx.Rngs):
   self.linear = nnx.Linear(in_features=in_features, out_features=1, rngs=rngs)
@@ -133,7 +75,6 @@ if __name__=="__main__":
  d_model = 32
  max_len = 100
  iters = 1000
- # batch = 10
 
  encodings = {
   'sincos': sin_cos_pos_enc_arr(max_len, d_model),
@@ -161,8 +102,6 @@ if __name__=="__main__":
  x = jnp.arange(max_len) / max_len
  print(f"{ x.shape = }")
 
- # x = jax.nn.one_hot(jnp.arange(max_len), max_len)
- 
  for _ in range(iters):
   count += 1
   for name, enc in encodings.items():
@@ -171,34 +110,9 @@ if __name__=="__main__":
    pe = enc[:max_len, :]
    print(f"{pe.shape=}")
 
-   # pred = m(enc).reshape((max_len,))
-
-   # print(f"{ pred.shape = }")
-
    loss = train_step(m, optimizers[name], pe, x)
    print(f"{name} {loss=}")
    total_losses[name] += loss
    print(f"{name} total loss {total_losses[name]}")
 
    print(f"{name} mean loss: {mean_loss(name)}")
-
-   
-   
-   
-  # for pos in range(max_len):
-  #  count += 1
-  #  scaled_pos = jnp.array(pos / max_len)
-  #  for name, model in models.items():
-  #   enc = encodings[name]
-  #   opt = optimizers[name]
-
-  #   e = enc(pos)
-  #   pos_again = model(e)
-
-  #   loss = train_step(model, opt, scaled_pos, pos_again)
-  #   total_losses[name] += loss
-
-  #   print(f"{name} mean loss: {mean_loss(name)}")
-
-    
- 
