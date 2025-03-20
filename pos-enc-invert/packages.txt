@@ -1,0 +1,5 @@
+flax==0.10.4
+ipython==9.0.2
+jax==0.5.2
+jaxlib==0.5.1
+optax==0.2.4
