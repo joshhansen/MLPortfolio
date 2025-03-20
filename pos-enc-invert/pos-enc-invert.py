@@ -287,15 +287,6 @@ if __name__=="__main__":
    losses_by_iteration[i] = defaultdict(list)
    return losses_by_iteration[i]
   
-
- # iteration_total_losses: dict[int, dict[str, float]] = dict()
- # def iteration_losses(i: int) -> dict[str, float]:
- #  try:
- #   return iteration_total_losses[i]
- #  except KeyError:
- #   iteration_total_losses[i] = defaultdict(float)
- #   return iteration_total_losses[i]
-
  for init in range(inits):
   rngs = nnx.Rngs(init)
 
@@ -308,11 +299,6 @@ if __name__=="__main__":
   }
 
   # Models trying to recover the encoded position
-  # models = {
-  #  'sincos': Inverter(in_features=d_model, rngs=rngs),
-  #  'norm': Inverter(in_features=d_model, rngs=rngs),
-  #  'norm2': Inverter(in_features=d_model, rngs=rngs),
-  # }
   models = { name: Inverter(in_features=d_model, rngs=rngs) for name in encodings.keys() }
 
   inverted_encodings = {
@@ -336,14 +322,6 @@ if __name__=="__main__":
   names = list(names_set)
   names.sort()
 
-  # total_losses: dict[str,float] = defaultdict(float)
-  # def record_loss(iter: int, name: str, loss: jax.Array):
-  #  loss_ = float(loss)
-  #  total_losses[name] += loss_
-  #  if record_iter(iter):
-  #   l = iteration_losses(iter)
-  #   l[name] += loss_
-
   def record_loss(iter: int, name: str, loss: jax.Array):
    if record_iter(iter):
     iter_losses = iteration_losses(iter)
@@ -354,9 +332,6 @@ if __name__=="__main__":
 
   for count in range(iters):
    for name, enc in encodings.items():
-    # print(f"{name=}")
-    # print(f"{enc=}")
-    # print(f"{enc[0]}")
     m = models[name]
 
     pe = enc[:max_len, :]
@@ -371,34 +346,10 @@ if __name__=="__main__":
     loss = step(model=inv_enc, opt=opt, y=y)
     record_loss(count, name, loss)
     
-
-   # name = 'norm_learned'
-   # y = jnp.arange(max_len).astype(jnp.float32) / max_len
-   # loss = train_step_learn_normenc(model=norm_inverted, opt=norm_inverted_opt, y=y)
-   # record_loss(count, name, loss)
-
-   # name = 'norm_learned2'
-   # y = jnp.arange(max_len).astype(jnp.float32) / max_len
-   # loss = train_step_learn_normenc2(model=norm_inverted2, opt=norm_inverted2_opt, y=y)
-   # record_loss(count, name, loss)
-
-  # def mean_loss(name: str):
-  #  # print(f"mean_loss({name})={total_losses[name]} / {iters}")
-  #  return total_losses[name] / iters
- 
-  # for name in names:
-  #  print(f"{init=} {name} mean loss: {mean_loss(name)}")
-
-  # print(norm_inverted.enc.means.value)
-  # print(norm_inverted.enc.variances.value)
-  # print(norm_inverted2.enc.means.value)
-  # print(norm_inverted2.enc.variances.value)
-
  saved_iters = list(losses_by_iteration.keys())
  saved_iters.sort()
  
  def mean_iter_loss(i: int, name: str) -> float:
-  # print(f"mean_loss({name})={total_losses[name]} / {iters}")
   return math.fsum(iteration_losses(i)[name]) / iters
 
  def var_iter_loss(i: int, name: str) -> float:
