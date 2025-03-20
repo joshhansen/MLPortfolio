@@ -235,16 +235,11 @@ def train_step_learn_normenc(*, model: InvertedNormPosEnc, opt: nnx.Optimizer, y
 def train_step_learn_normenc2(*, model: InvertedNormPosEnc2, opt: nnx.Optimizer, y: jax.Array):
  def loss_fn(model: InvertedNormPosEnc2):
   y_pred = model()
-  # print(f"{y=}")
-  # print(f"{y_pred=}")
   l = optax.losses.squared_error(y_pred, y).mean()
-  # print(f"{l=}")
   return l
  
  loss, grads = nnx.value_and_grad(loss_fn)(model)
  opt.update(grads)
-
- # print(f"{loss=}")
 
  return loss
 
@@ -274,22 +269,32 @@ def default_opt():
  return optax.adam(1e-1)
 
 if __name__=="__main__":
- inits = 20
+ inits = 1000
  d_model = 32
  max_len = 100
- iters = 100
+ iters = 5000
  print(f"{inits=}")
  print(f"{d_model=}")
  print(f"{max_len=}")
  print(f"{iters=}")
 
- iteration_total_losses: dict[int, dict[str, float]] = dict()
- def iteration_losses(i: int) -> dict[str, float]:
+ # Store losses so we can compute statistics
+ losses_by_iteration: dict[int, dict[str, list[float]]] = dict()
+ def iteration_losses(i: int) -> dict[str, list[float]]:
   try:
-   return iteration_total_losses[i]
+   return losses_by_iteration[i]
   except KeyError:
-   iteration_total_losses[i] = defaultdict(float)
-   return iteration_total_losses[i]
+   losses_by_iteration[i] = defaultdict(list)
+   return losses_by_iteration[i]
+  
+
+ # iteration_total_losses: dict[int, dict[str, float]] = dict()
+ # def iteration_losses(i: int) -> dict[str, float]:
+ #  try:
+ #   return iteration_total_losses[i]
+ #  except KeyError:
+ #   iteration_total_losses[i] = defaultdict(float)
+ #   return iteration_total_losses[i]
 
  for init in range(inits):
   rngs = nnx.Rngs(init)
@@ -331,13 +336,19 @@ if __name__=="__main__":
   names = list(names_set)
   names.sort()
 
-  total_losses: dict[str,float] = defaultdict(float)
+  # total_losses: dict[str,float] = defaultdict(float)
+  # def record_loss(iter: int, name: str, loss: jax.Array):
+  #  loss_ = float(loss)
+  #  total_losses[name] += loss_
+  #  if record_iter(iter):
+  #   l = iteration_losses(iter)
+  #   l[name] += loss_
+
   def record_loss(iter: int, name: str, loss: jax.Array):
-   loss_ = float(loss)
-   total_losses[name] += loss_
    if record_iter(iter):
-    l = iteration_losses(iter)
-    l[name] += loss_
+    iter_losses = iteration_losses(iter)
+    loss_ = float(loss)
+    iter_losses[name].append(loss_)
 
   x = jnp.arange(max_len) / max_len
 
@@ -371,9 +382,9 @@ if __name__=="__main__":
    # loss = train_step_learn_normenc2(model=norm_inverted2, opt=norm_inverted2_opt, y=y)
    # record_loss(count, name, loss)
 
-  def mean_loss(name: str):
-   # print(f"mean_loss({name})={total_losses[name]} / {iters}")
-   return total_losses[name] / iters
+  # def mean_loss(name: str):
+  #  # print(f"mean_loss({name})={total_losses[name]} / {iters}")
+  #  return total_losses[name] / iters
  
   # for name in names:
   #  print(f"{init=} {name} mean loss: {mean_loss(name)}")
@@ -383,12 +394,22 @@ if __name__=="__main__":
   # print(norm_inverted2.enc.means.value)
   # print(norm_inverted2.enc.variances.value)
 
- saved_iters = list(iteration_total_losses.keys())
+ saved_iters = list(losses_by_iteration.keys())
  saved_iters.sort()
  
- def mean_iter_loss(i: int, name: str):
+ def mean_iter_loss(i: int, name: str) -> float:
   # print(f"mean_loss({name})={total_losses[name]} / {iters}")
-  return iteration_losses(i)[name] / iters
+  return math.fsum(iteration_losses(i)[name]) / iters
+
+ def var_iter_loss(i: int, name: str) -> float:
+  mean = mean_iter_loss(i, name)
+
+  var = 0.0
+
+  for l in iteration_losses(i)[name]:
+   var += (mean - l)**2
+
+  return var 
 
  # Example:
  # iter,norm,norm2,norm_learned,norm2_learned
@@ -397,7 +418,8 @@ if __name__=="__main__":
  # 2,0.28,0.18,0.23,0.38
  sys.stdout.write('iter')
  for n in names:
-  sys.stdout.write(f",{n}")
+  sys.stdout.write(f",{n} (mean)")
+  sys.stdout.write(f",{n} (var)")
  sys.stdout.write('\n')
 
  for i in saved_iters:
@@ -406,4 +428,6 @@ if __name__=="__main__":
   for name in names:
    sys.stdout.write(',')
    sys.stdout.write(str(mean_iter_loss(i, name)))
+   sys.stdout.write(',')
+   sys.stdout.write(str(var_iter_loss(i, name)))
   sys.stdout.write('\n')
