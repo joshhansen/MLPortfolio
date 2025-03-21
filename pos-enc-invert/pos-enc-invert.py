@@ -83,11 +83,22 @@ def normal_pos_enc_arr2(*, length: int, depth: int, means: jax.Array, variances:
 # Though the values are deterministic, they are normally distributed on a per-
 # depth-dimension basis.
 def default_normal_pos_enc_arr2(*, length: int, depth: int, key: jax.Array) -> jax.Array:
- interval = float(length) / float(depth)
- means = jnp.arange(depth) * interval
+ k0, k1 = jr.split(key, 2)
+
+ means = jax.random.normal(k0, (depth))
+ 
+ # interval = float(length) / float(depth)
+ # means = jnp.arange(depth) * interval
+
+ # Center the means around 0
+ # means -= depth/2
+
+ 
+
  # variances = jax.random.normal(key, (depth,)) * length
  # variances = (jnp.arange(depth) + 1).astype(jnp.float32)
- variances = jnp.ones((depth,))
+ # variances = jnp.ones((depth,))
+ variances = jnp.abs(jax.random.normal(k1, (depth,)))
 
  return normal_pos_enc_arr2(length=length, depth=depth, means=means, variances=variances)
 
