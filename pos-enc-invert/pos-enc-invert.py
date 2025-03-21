@@ -277,13 +277,13 @@ def record_iter(i: int) -> bool:
  #  return True
 
 def default_opt():
- return optax.adam(1e-1)
+ return optax.adam(1e-3)
 
 if __name__=="__main__":
- inits = 1000
+ inits = 50
  d_model = 32
  max_len = 100
- iters = 5000
+ iters = 1000
  print(f"{inits=}")
  print(f"{d_model=}")
  print(f"{max_len=}")
@@ -303,7 +303,7 @@ if __name__=="__main__":
 
   encodings = {
    'sincos': sin_cos_pos_enc_arr(max_len, d_model),
-   'norm': normal_pos_enc_arr(max_len, d_model, rngs()),
+   # 'norm': normal_pos_enc_arr(max_len, d_model, rngs()),
    'norm2': default_normal_pos_enc_arr2(length=max_len, depth=d_model, key=rngs()),
    'direct': direct_pos_enc(length=max_len, depth=d_model),
    'direct_all': direct_all_pos_enc(length=max_len, depth=d_model)
@@ -313,13 +313,13 @@ if __name__=="__main__":
   models = { name: Inverter(in_features=d_model, rngs=rngs) for name in encodings.keys() }
 
   inverted_encodings = {
-   'norm_inverted': InvertedNormPosEnc(length=max_len, depth=d_model, rngs=rngs),
+   # 'norm_inverted': InvertedNormPosEnc(length=max_len, depth=d_model, rngs=rngs),
    'norm_inverted2': InvertedNormPosEnc2(length=max_len, depth=d_model, rngs=rngs),
    'linear_inverted': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs),
   }
 
   train_steps = {
-   'norm_inverted': train_step_learn_normenc,
+   # 'norm_inverted': train_step_learn_normenc,
    'norm_inverted2': train_step_learn_normenc2,
    'linear_inverted': train_step_learn_linear,
   }
