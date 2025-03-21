@@ -34,7 +34,7 @@ def sin_cos_pos_enc_arr(length: int, depth: int) -> jax.Array:
 
  return jnp.concatenate([s, c], axis=-1)# (seq, depth)
 
-def normal_pos_enc_arr2(*, length: int, depth: int, means: jax.Array, variances: jax.Array) -> jax.Array:
+def normal_pos_enc_arr(*, length: int, depth: int, means: jax.Array, variances: jax.Array) -> jax.Array:
   samples: list[jax.Array] = list()
   samples.append(jnp.repeat(-9999999, depth))
 
@@ -60,25 +60,13 @@ def normal_pos_enc_arr2(*, length: int, depth: int, means: jax.Array, variances:
 # univariate gaussian. ("Sample" in quotes because the values are not random.)
 # Though the values are deterministic, they are normally distributed on a per-
 # depth-dimension basis.
-def default_normal_pos_enc_arr2(*, length: int, depth: int, key: jax.Array) -> jax.Array:
+def default_normal_pos_enc_arr(*, length: int, depth: int, key: jax.Array) -> jax.Array:
  k0, k1 = jr.split(key, 2)
 
  means = jax.random.normal(k0, (depth))
- 
- # interval = float(length) / float(depth)
- # means = jnp.arange(depth) * interval
-
- # Center the means around 0
- # means -= depth/2
-
- 
-
- # variances = jax.random.normal(key, (depth,)) * length
- # variances = (jnp.arange(depth) + 1).astype(jnp.float32)
- # variances = jnp.ones((depth,))
  variances = jnp.abs(jax.random.normal(k1, (depth,)))
 
- return normal_pos_enc_arr2(length=length, depth=depth, means=means, variances=variances)
+ return normal_pos_enc_arr(length=length, depth=depth, means=means, variances=variances)
 
 
 # This says how far in the normal distribution with given parameters you have to integrate
@@ -109,7 +97,7 @@ def direct_all_pos_enc(*, length: int, depth: int) -> jax.Array:
  # (seq, depth)
 
 # Randomly-parameterized, learning version of normal_pos_enc_arr2
-class NormPosEnc2(nnx.Module):
+class NormPosEnc(nnx.Module):
  def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs):
   self.length = length
   self.depth = depth
@@ -117,7 +105,7 @@ class NormPosEnc2(nnx.Module):
   self.variances = nnx.Param(jnp.abs(jax.random.normal(rngs(), (depth,))))
 
  def pos_enc_arr(self) -> jax.Array:
-  return normal_pos_enc_arr2(
+  return normal_pos_enc_arr(
    length=self.length,
    depth=self.depth,
    means=self.means.value,
@@ -142,15 +130,14 @@ class Inverter(nnx.Module):
  def __call__(self, x: jax.Array) -> jax.Array:
   return nnx.sigmoid(self.linear(x))[:, 0]
 
-class InvertedNormPosEnc2(nnx.Module):
+class InvertedNormPosEnc(nnx.Module):
  def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs):
   self.length = length
-  self.enc = NormPosEnc2(length=length, depth=depth, rngs=rngs)
+  self.enc = NormPosEnc(length=length, depth=depth, rngs=rngs)
   self.invert = Inverter(in_features=depth, rngs=rngs)
 
  def __call__(self):
   enc = self.enc.pos_enc_arr()
-  # print(f"{enc=}")
   y = enc[:self.length, :]
   y_pred = self.invert(y)
   return y_pred
@@ -182,8 +169,8 @@ def train_step(*, model: Inverter, opt: nnx.Optimizer, x: jax.Array, y: jax.Arra
 
 
 @nnx.jit
-def train_step_learn_normenc2(*, model: InvertedNormPosEnc2, opt: nnx.Optimizer, y: jax.Array):
- def loss_fn(model: InvertedNormPosEnc2):
+def train_step_learn_normenc(*, model: InvertedNormPosEnc, opt: nnx.Optimizer, y: jax.Array):
+ def loss_fn(model: InvertedNormPosEnc):
   y_pred = model()
   l = optax.losses.squared_error(y_pred, y).mean()
   return l
@@ -242,22 +229,22 @@ if __name__=="__main__":
 
   encodings = {
    'sincos': sin_cos_pos_enc_arr(max_len, d_model),
-   'norm2': default_normal_pos_enc_arr2(length=max_len, depth=d_model, key=rngs()),
-   'direct': direct_pos_enc(length=max_len, depth=d_model),
-   'direct_all': direct_all_pos_enc(length=max_len, depth=d_model)
+   'norm': default_normal_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
+   'direct1': direct_pos_enc(length=max_len, depth=d_model),
+   'directN': direct_all_pos_enc(length=max_len, depth=d_model)
   }
 
   # Models trying to recover the encoded position
   models = { name: Inverter(in_features=d_model, rngs=rngs) for name in encodings.keys() }
 
   inverted_encodings = {
-   'norm_inverted2': InvertedNormPosEnc2(length=max_len, depth=d_model, rngs=rngs),
-   'linear_inverted': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs),
+   'norm_learned': InvertedNormPosEnc(length=max_len, depth=d_model, rngs=rngs),
+   'linear_learned': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs),
   }
 
   train_steps = {
-   'norm_inverted2': train_step_learn_normenc2,
-   'linear_inverted': train_step_learn_linear,
+   'norm_learned': train_step_learn_normenc,
+   'linear_learned': train_step_learn_linear,
   }
 
   optimizers = { k: nnx.Optimizer(v, default_opt()) for k,v in models.items() }
