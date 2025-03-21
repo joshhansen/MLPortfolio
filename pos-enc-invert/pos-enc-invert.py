@@ -10,8 +10,6 @@ import jax.random as jr
 from flax import nnx
 import optax
 
-# jax.config.update("jax_debug_nans", True)
-
 # Generates a length x depth matrix where each row is a depth-sized vector of position encodings
 # corresponding to the row index
 def sin_cos_pos_enc_arr(length: int, depth: int) -> jax.Array:
@@ -205,15 +203,19 @@ def record_iter(i: int) -> bool:
 def default_opt():
  return optax.adam(1e-3)
 
+def eprint(s: str):
+ sys.stderr.write(s)
+ sys.stderr.write('\n')
+
 if __name__=="__main__":
  inits = 50
  d_model = 32
  max_len = 100
  iters = 1000
- print(f"{inits=}")
- print(f"{d_model=}")
- print(f"{max_len=}")
- print(f"{iters=}")
+ eprint(f"{inits=}")
+ eprint(f"{d_model=}")
+ eprint(f"{max_len=}")
+ eprint(f"{iters=}")
 
  # Store losses so we can compute statistics
  losses_by_iteration: dict[int, dict[str, list[float]]] = dict()
@@ -225,6 +227,7 @@ if __name__=="__main__":
    return losses_by_iteration[i]
   
  for init in range(inits):
+  eprint(f"{init=}")
   rngs = nnx.Rngs(init)
 
   encodings = {
