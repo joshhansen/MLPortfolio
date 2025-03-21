@@ -211,11 +211,15 @@ if __name__=="__main__":
  inits = 50
  d_model = 32
  max_len = 100
- iters = 1000
+ iters = 2000
+ # Whether to calculate variances in addition to means
+ generate_var = False
+
  eprint(f"{inits=}")
  eprint(f"{d_model=}")
  eprint(f"{max_len=}")
  eprint(f"{iters=}")
+ eprint(f"{generate_var=}")
 
  # Store losses so we can compute statistics
  losses_by_iteration: dict[int, dict[str, list[float]]] = dict()
@@ -263,7 +267,15 @@ if __name__=="__main__":
    if record_iter(iter):
     iter_losses = iteration_losses(iter)
     loss_ = float(loss)
-    iter_losses[name].append(loss_)
+
+    if generate_var:
+     iter_losses[name].append(loss_)
+    else:
+     # Just keep a running sum so we can calculate means
+     if len(iter_losses[name]) == 0:
+      iter_losses[name] = [loss_]
+     else:
+      iter_losses[name][0] += loss_
 
   x = jnp.arange(max_len) / max_len
 
@@ -306,8 +318,11 @@ if __name__=="__main__":
  # 2,0.28,0.18,0.23,0.38
  sys.stdout.write('iter')
  for n in names:
-  sys.stdout.write(f",{n} (mean)")
-  sys.stdout.write(f",{n} (var)")
+  if generate_var:
+   sys.stdout.write(f",{n} (mean)")
+   sys.stdout.write(f",{n} (var)")
+  else:
+   sys.stdout.write(f",{n}")
  sys.stdout.write('\n')
 
  for i in saved_iters:
@@ -316,6 +331,7 @@ if __name__=="__main__":
   for name in names:
    sys.stdout.write(',')
    sys.stdout.write(str(mean_iter_loss(i, name)))
-   sys.stdout.write(',')
-   sys.stdout.write(str(var_iter_loss(i, name)))
+   if generate_var:
+    sys.stdout.write(',')
+    sys.stdout.write(str(var_iter_loss(i, name)))
   sys.stdout.write('\n')
