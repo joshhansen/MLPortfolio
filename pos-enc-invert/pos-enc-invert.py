@@ -32,6 +32,19 @@ def sin_cos_pos_enc_arr(length: int, depth: int) -> jax.Array:
 
  return jnp.concatenate([s, c], axis=-1)# (seq, depth)
 
+def linear_pos_enc_arr(*, length: int, weights: jax.Array, bias: jax.Array) -> jax.Array:
+ y = jnp.arange(length) / length
+ y = y.reshape((length, 1))
+
+ return y * weights + bias
+
+def default_linear_pos_enc_arr(*, length: int, depth: int, key: jax.Array) -> jax.Array:
+ k0, k1 = jr.split(key, 2)
+ w = jax.random.normal(k0, (depth,))
+ b = jax.random.normal(k1, ())
+
+ return linear_pos_enc_arr(length=length, weights=w, bias=b)
+
 def normal_pos_enc_arr(*, length: int, depth: int, means: jax.Array, variances: jax.Array) -> jax.Array:
   samples: list[jax.Array] = list()
   samples.append(jnp.repeat(-9999999, depth))
@@ -114,12 +127,11 @@ class NormPosEnc(nnx.Module):
 class LinearPosEnc(nnx.Module):
  def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs):
   self.length = length
-  self.ff = nnx.Linear(in_features=1, out_features=depth, rngs=rngs)
+  self.weights = nnx.Param(jax.random.normal(rngs(), (depth,)))
+  self.bias = nnx.Param(jax.random.normal(rngs(), ()))
 
  def pos_enc_arr(self) -> jax.Array:
-  y = jnp.arange(self.length) / self.length
-  y = y.reshape((self.length, 1))
-  return self.ff(y)
+  return linear_pos_enc_arr(length=self.length, weights=self.weights, bias=self.bias)
 
 class Inverter(nnx.Module):
  def __init__(self, *, in_features: int, rngs: nnx.Rngs):
@@ -208,10 +220,10 @@ def eprint(s: str):
  sys.stderr.write('\n')
 
 if __name__=="__main__":
- inits = 50
+ inits = 100
  d_model = 32
  max_len = 100
- iters = 2000
+ iters = 10000
  # Whether to calculate variances in addition to means
  generate_var = False
 
@@ -238,7 +250,8 @@ if __name__=="__main__":
    'sincos': sin_cos_pos_enc_arr(max_len, d_model),
    'norm': default_normal_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
    'direct1': direct_pos_enc(length=max_len, depth=d_model),
-   'directN': direct_all_pos_enc(length=max_len, depth=d_model)
+   'directN': direct_all_pos_enc(length=max_len, depth=d_model),
+   'linear': default_linear_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
   }
 
   # Models trying to recover the encoded position
