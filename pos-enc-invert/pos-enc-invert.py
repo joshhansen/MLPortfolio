@@ -217,16 +217,6 @@ def train_step_learn_linear(*, model: InvertedLinearPosEnc, opt: nnx.Optimizer, 
 
  return loss
 
-# Should we record the results of a given training iteration?
-def record_iter(i: int) -> bool:
- return True
- # try:
- #  l = math.log10(i)
- #  return int(l) == l
- # except ValueError:
- #  # Record iteration 0
- #  return True
-
 def default_opt():
  return optax.adam(1e-3)
 
@@ -295,18 +285,17 @@ if __name__=="__main__":
   names.sort()
 
   def record_loss(iter: int, name: str, loss: jax.Array):
-   if record_iter(iter):
-    iter_losses = iteration_losses(iter)
-    loss_ = float(loss)
+   iter_losses = iteration_losses(iter)
+   loss_ = float(loss)
 
-    if generate_var:
-     iter_losses[name].append(loss_)
+   if generate_var:
+    iter_losses[name].append(loss_)
+   else:
+    # Just keep a running sum so we can calculate means
+    if len(iter_losses[name]) == 0:
+     iter_losses[name] = [loss_]
     else:
-     # Just keep a running sum so we can calculate means
-     if len(iter_losses[name]) == 0:
-      iter_losses[name] = [loss_]
-     else:
-      iter_losses[name][0] += loss_
+     iter_losses[name][0] += loss_
 
   x = jnp.arange(max_len) / max_len
 
