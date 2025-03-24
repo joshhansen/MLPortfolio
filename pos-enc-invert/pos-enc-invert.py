@@ -239,13 +239,8 @@ if __name__=="__main__":
  eprint(f"{generate_var=}")
 
  # Store losses so we can compute statistics
- losses_by_iteration: dict[int, dict[str, list[float]]] = dict()
- def iteration_losses(i: int) -> dict[str, list[float]]:
-  try:
-   return losses_by_iteration[i]
-  except KeyError:
-   losses_by_iteration[i] = defaultdict(list)
-   return losses_by_iteration[i]
+ # iter -> encoding name -> list of losses across all initializations
+ iteration_losses = [ defaultdict(list) for _ in range(iters) ]
   
  for init in range(inits):
   eprint(f"{init=}")
@@ -285,7 +280,7 @@ if __name__=="__main__":
   names.sort()
 
   def record_loss(iter: int, name: str, loss: jax.Array):
-   iter_losses = iteration_losses(iter)
+   iter_losses = iteration_losses[iter]
    loss_ = float(loss)
 
    if generate_var:
@@ -319,14 +314,14 @@ if __name__=="__main__":
  saved_iters.sort()
  
  def mean_iter_loss(i: int, name: str) -> float:
-  return math.fsum(iteration_losses(i)[name]) / iters
+  return math.fsum(iteration_losses[i][name]) / iters
 
  def var_iter_loss(i: int, name: str) -> float:
   mean = mean_iter_loss(i, name)
 
   var = 0.0
 
-  for l in iteration_losses(i)[name]:
+  for l in iteration_losses[i][name]:
    var += (mean - l)**2
 
   return var 
