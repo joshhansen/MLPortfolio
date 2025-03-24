@@ -38,10 +38,17 @@ def linear_pos_enc_arr(*, length: int, weights: jax.Array, bias: jax.Array) -> j
 
  return y * weights + bias
 
-def default_linear_pos_enc_arr(*, length: int, depth: int, key: jax.Array) -> jax.Array:
+def default_linear_pos_enc_arr(*, length: int, depth: int, key: jax.Array, init: str) -> jax.Array:
  k0, k1 = jr.split(key, 2)
- w = jax.random.normal(k0, (depth,))
- b = jax.random.normal(k1, ())
+
+ if init == 'normal':
+  w = jax.random.normal(k0, (depth,))
+  b = jax.random.normal(k1, ())
+ elif init == 'uniform':
+  w = jax.random.uniform(k0, (depth,), minval=-1.0, maxval=1.0)
+  b = jax.random.uniform(k1, (), minval=-1.0, maxval=1.0)
+ else:
+  raise ValueError()
 
  return linear_pos_enc_arr(length=length, weights=w, bias=b)
 
@@ -125,10 +132,18 @@ class NormPosEnc(nnx.Module):
 
 # A learned densely-connected position encoding
 class LinearPosEnc(nnx.Module):
- def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs):
+ def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs, init: str):
   self.length = length
-  self.weights = nnx.Param(jax.random.normal(rngs(), (depth,)))
-  self.bias = nnx.Param(jax.random.normal(rngs(), ()))
+
+  if init == 'normal':
+   self.weights = nnx.Param(jax.random.normal(rngs(), (depth,)))
+   self.bias = nnx.Param(jax.random.normal(rngs(), ()))
+  elif init == 'uniform':
+   self.weights = nnx.Param(jax.random.uniform(rngs(), (depth,), minval=-1.0, maxval=1.0))
+   self.bias = nnx.Param(jax.random.uniform(rngs(), (), minval=-1.0, maxval=1.0))
+  else:
+   raise ValueError()
+   
 
  def pos_enc_arr(self) -> jax.Array:
   return linear_pos_enc_arr(length=self.length, weights=self.weights, bias=self.bias)
@@ -153,9 +168,9 @@ class InvertedNormPosEnc(nnx.Module):
   return y_pred
 
 class InvertedLinearPosEnc(nnx.Module):
- def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs):
+ def __init__(self, *, length: int, depth: int, rngs: nnx.Rngs, init: str):
   self.length = length
-  self.enc = LinearPosEnc(length=length, depth=depth, rngs=rngs)
+  self.enc = LinearPosEnc(length=length, depth=depth, rngs=rngs, init=init)
   self.invert = Inverter(in_features=depth, rngs=rngs)
 
  def __call__(self):
@@ -223,7 +238,7 @@ if __name__=="__main__":
  inits = 100
  d_model = 32
  max_len = 100
- iters = 10000
+ iters = 20000
  # Whether to calculate variances in addition to means
  generate_var = False
 
@@ -248,23 +263,26 @@ if __name__=="__main__":
 
   encodings = {
    'sincos': sin_cos_pos_enc_arr(max_len, d_model),
-   'norm': default_normal_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
+   'normal': default_normal_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
    'direct1': direct_pos_enc(length=max_len, depth=d_model),
    'directN': direct_all_pos_enc(length=max_len, depth=d_model),
-   'linear': default_linear_pos_enc_arr(length=max_len, depth=d_model, key=rngs()),
+   'linear_normal': default_linear_pos_enc_arr(length=max_len, depth=d_model, key=rngs(), init='normal'),
+   'linear_uniform': default_linear_pos_enc_arr(length=max_len, depth=d_model, key=rngs(), init='uniform'),
   }
 
   # Models trying to recover the encoded position
   models = { name: Inverter(in_features=d_model, rngs=rngs) for name in encodings.keys() }
 
   inverted_encodings = {
-   'norm_learned': InvertedNormPosEnc(length=max_len, depth=d_model, rngs=rngs),
-   'linear_learned': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs),
+   'normal_learned': InvertedNormPosEnc(length=max_len, depth=d_model, rngs=rngs),
+   'linear_normal_learned': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs, init='normal'),
+   'linear_uniform_learned': InvertedLinearPosEnc(length=max_len, depth=d_model, rngs=rngs, init='uniform'),
   }
 
   train_steps = {
-   'norm_learned': train_step_learn_normenc,
-   'linear_learned': train_step_learn_linear,
+   'normal_learned': train_step_learn_normenc,
+   'linear_normal_learned': train_step_learn_linear,
+   'linear_uniform_learned': train_step_learn_linear,
   }
 
   optimizers = { k: nnx.Optimizer(v, default_opt()) for k,v in models.items() }
