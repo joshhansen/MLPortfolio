@@ -310,9 +310,6 @@ if __name__=="__main__":
     loss = step(model=inv_enc, opt=opt, y=y)
     record_loss(count, name, loss)
     
- saved_iters = list(losses_by_iteration.keys())
- saved_iters.sort()
- 
  def mean_iter_loss(i: int, name: str) -> float:
   return math.fsum(iteration_losses[i][name]) / iters
 
@@ -340,7 +337,7 @@ if __name__=="__main__":
    sys.stdout.write(f",{n}")
  sys.stdout.write('\n')
 
- for i in saved_iters:
+ for i in range(iters):
   sys.stdout.write(str(i))
   
   for name in names:
